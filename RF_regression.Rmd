@@ -1,0 +1,704 @@
+---
+title: "RF_regression"
+author: "Wenxuan Dong"
+date: "2023-04-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages, include=FALSE}
+library(tidyverse)
+library(qiime2R)
+library(phyloseq)
+library(zoo)
+library(randomForest)
+library(xgboost)
+library(skimr)
+library(DataExplorer)
+library(caret)
+library(pROC)
+library(pheatmap)
+library(ggsci)
+library(ggpubr)
+```
+
+```{r meta & otu, include=FALSE, cache=TRUE}
+meta <- read.table("sample-metadata.tsv", sep = "\t", header = TRUE)
+## Control groups
+meta_con <- filter(meta, birth_weight == "LBW", treatment == "CON")
+meta_out <- setdiff(meta, meta_con)
+
+table <- read_qza("qiime_out/rarefied_table.qza")
+otu_table <- as.data.frame(table$data) %>% 
+  filter_features(14,2)
+
+otu_table$OTUons <- paste0("Feature",1:nrow(otu_table))
+otu_table$OTUstring <- rownames(otu_table)
+
+rownames(otu_table) <- otu_table$OTUons
+otu_key <- dplyr::select(otu_table, OTUons:OTUstring)
+otu_table <- dplyr::select(otu_table, -OTUons, -OTUstring)
+otu_table <- t(otu_table)
+otu_table <- as.data.frame(otu_table)
+otu_table$sample.id <- rownames(otu_table)
+
+data_model <- inner_join(otu_table, meta_con) %>%
+  dplyr::select(Feature1:Feature1349, age, sample.id) %>%
+  column_to_rownames(var = "sample.id")
+
+data_all <- inner_join(otu_table, meta) %>%
+  dplyr::select(Feature1:Feature1349, age, sample.id) %>%
+  column_to_rownames(var = "sample.id")
+```
+
+
+```{r}
+set.seed(316)
+
+trainlist <- createDataPartition(
+  y = data_model$age,
+  p = 0.8,
+  list = F)
+data_train <- data_model[trainlist,]
+data_test <- data_model[-trainlist,]
+
+set.seed(316)
+fit_rf <- randomForest(
+  age ~.,
+  data = data_train,
+  importance = TRUE,
+  proximity = TRUE,
+  ntree = 10000
+)
+cv_rf <- rfcv(data_train[,-ncol(data_train)], data_train$age, cv.fold = 10)
+fit_rf
+cv_rf$error.cv
+with(cv_rf, plot(n.var, error.cv, log="x", type="o", lwd=2))
+
+# save(fit_rf, cv_rf, file = "rf_no_filter.rda")
+```
+
+```{r}
+train.p = predict(fit_rf, type = "response")
+df = data.frame(observed = data_train$age, predict = train.p)
+cor = cor.test(df[,1], df[,2], method = "spearman")
+m = lm(observed ~ predict, df)
+p = ggplot(df, aes(observed, predict)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(title = paste("rho = " , round(cor$estimate, digits = 3), ", P = " , signif(cor$p.value, digits = 3), ", R2 = ", round(summary(m)$r.squared, digits = 3) , sep = "")) +
+  theme_bw()
+p
+```
+
+```{r}
+test.p = predict(fit_rf, data_test, type = "response")
+df = data.frame(observed = data_test$age, predict = test.p)
+
+cor = cor.test(df[,1], df[,2], method = "spearman")
+m = lm(observed ~ predict, df)
+p = ggplot(df, aes(observed, predict)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(title = paste("rho = " , round(cor$estimate, digits = 3), ", P = " , signif(cor$p.value, digits = 3), ", R2 = ", round(summary(m)$r.squared, digits = 3) , sep = "")) +
+  theme_bw()
+p
+```
+
+```{r}
+all.p = predict(fit_rf, data_all, type = "response")
+df = data.frame(observed = data_all$age, predict = all.p)
+
+cor = cor.test(df[,1], df[,2], method = "spearman")
+m = lm(observed ~ predict, df)
+p = ggplot(df, aes(observed, predict)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(title = paste("rho = " , round(cor$estimate, digits = 3), ", P = " , signif(cor$p.value, digits = 3), ", R2 = ", round(summary(m)$r.squared, digits = 3) , sep = "")) +
+  theme_bw()
+p
+```
+
+```{r}
+df$sample.id <- row.names(df)
+df <- inner_join(df, meta)
+df$observed <- as.numeric(df$observed)
+ggboxplot(filter(df, stage == "suckling"), x = "observed", y = "predict", 
+          color = "birth_weight", palette = c("#0072B2", "#E69F00"),
+          add = "jitter", add.params = list(alpha = 1))
+```
+
+```{r}
+ggboxplot(filter(df, stage == "weaning"), x = "observed", y = "predict", 
+          color = "birth_weight", palette = c("#0072B2", "#E69F00"),
+          add = "jitter", add.params = list(alpha = 1),
+          shape = "treatment")
+```
+
+```{r}
+data_wean_age <- df %>% filter(stage == "weaning") %>% 
+  group_by(age, birth_weight, treatment) %>% 
+  summarise(mean_pred = mean(predict, na.rm=TRUE),
+            sem_pred = sd(predict, na.rm=TRUE)/sqrt(n()))
+
+ggplot(data_wean_age, aes(age, mean_pred, group = interaction(birth_weight, treatment), color = birth_weight)) +
+  geom_errorbar(aes(ymin = mean_pred - sem_pred, ymax = mean_pred + sem_pred),
+                width = 0.5, lwd = 0.5, position = position_dodge(0.5), alpha = .5) +
+  geom_line(aes(linetype = treatment), lwd = 1, position = position_dodge(0.5)) +
+  geom_point(aes(shape = treatment), size = 2.5, position = position_dodge(0.5)) +
+  scale_linetype_manual(values = c("solid", "dashed"))+
+  scale_color_manual(values = c("#0072B2", "#E69F00"))+
+  theme_bw()
+```
+
+# external models from meta-analysis
+
+```{r}
+rm(list = ls())
+# load the model and otu table form the meta analysis
+load("rf_meta/fit_rf_1.RData")
+load('rf_meta/cv_rf_1.RData')
+load("m_age_models.rda") # linear mixed-effects models
+# load meta data
+meta <- read.table("sample-metadata.tsv", sep = "\t", header = TRUE)
+# reference otu table (from meta-analysis)
+ref_table <- read_qza("rf_meta/table-out.qza")
+ref_otu_table <- as.data.frame(ref_table$data) %>% 
+  filter_features(100,2)
+ref_otu_table <- prop.table(data.matrix(ref_otu_table),2)
+ref_otu_table <- as.data.frame(ref_otu_table)
+# head(sort(colSums(ref_otu_table)))
+ref_otu_table <- ref_otu_table[apply(ref_otu_table, 1, function(x) max(x) > 0.001),]
+# head(sort(colSums(ref_otu_table)))
+ref_otu_table$OTUons <- paste0("Feature",1:nrow(ref_otu_table))
+ref_otu_table$OTUstring <- rownames(ref_otu_table)
+rownames(ref_otu_table) <- ref_otu_table$OTUons
+otu_key <- select(ref_otu_table, OTUons:OTUstring)
+```
+
+
+```{r}
+# otu table from the current dataset
+table <- read_qza("rf_meta/table-cr-97.qza")
+otu_table <- as.data.frame(table$data)
+# head(sort(colSums(otu_table)))
+otu_table <- otu_table %>%
+  select_if(~sum(.) > 10000)
+
+otu_table <- prop.table(data.matrix(otu_table),2)
+otu_table <- as.data.frame(otu_table)
+# head(sort(colSums(otu_table)))
+otu_table$OTUstring <- row.names(otu_table)
+# only keep the features used to train the meta-analysis model
+otu_table <- left_join(ref_otu_table, otu_table)
+otu_table[is.na(otu_table)] <- 0
+row.names(otu_table) <- otu_table$OTUons
+otu_table <- select(otu_table, -(sr19w24id10con10:OTUstring))
+# head(sort(colSums(otu_table)))
+otu_table <- t(otu_table)
+otu_table <- as.data.frame(otu_table)
+# head(sort(rowSums(otu_table)))
+# now filter out samples that are poorly represented (<90% seqs) using the current otu set
+otu_table <- otu_table %>%
+  filter(rowSums(.) >= 0.9)
+# head(sort(rowSums(otu_table)))
+
+otu_table$sample.id <- rownames(otu_table)
+
+data_all <- inner_join(otu_table, meta) %>% 
+  select(-tubeID, -(stage:FG)) %>% 
+  column_to_rownames(var = "sample.id") %>% 
+  rename(age_day = age)
+```
+
+
+<!-- # set1 <- row.names(otu_table) -->
+<!-- # set2 <- row.names(ref_otu_table) -->
+<!-- # inter <- intersect(set1, set2) -->
+<!-- # setequal(set1, intersect(set1, set2)) -->
+<!-- # 437 features from external data set did not present in training set -->
+
+
+
+<!-- # set1 <- colnames(otu_table) -->
+<!-- # df <- data.frame(fit_rf$importance) %>%  -->
+<!-- #   arrange(desc(X.IncMSE)) %>%  -->
+<!-- #   dplyr::slice(1:50) -->
+<!-- # set2 <- row.names(df) -->
+<!-- # inter <- intersect(set1, set2) -->
+<!-- # setequal(set2, intersect(set1, set2)) -->
+
+<!-- # only keep top 30 important features in meta-rf model, 12 features used to train model not present in our own data -->
+<!-- # only keep top 50 important features in meta-rf model, 18 features used to train model not present in our own data -->
+
+
+```{r}
+all.p = predict(fit_rf, data_all, type = "response")
+df = data.frame(observed = data_all$age, predict = all.p)
+
+cor = cor.test(df[,1], df[,2], method = "spearman")
+m = lm(observed ~ predict, df)
+p = ggplot(df, aes(observed, predict)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(title = paste("rho = " , round(cor$estimate, digits = 3), ", P = " , signif(cor$p.value, digits = 3), ", R2 = ", round(summary(m)$r.squared, digits = 3) , sep = "")) +
+  theme_bw()
+p
+```
+
+```{r}
+# write.table(df, 'm_age.tsv', sep = '\t', row.names = TRUE)
+
+# df <- read.table("m_age.tsv", sep = '\t', header = TRUE)
+```
+
+
+```{r}
+df$sample.id <- row.names(df)
+df <- inner_join(df, meta)
+df$observed <- as.numeric(df$observed)
+ggboxplot(filter(df, stage == "suckling"), x = "observed", y = "predict", 
+          color = "birth_weight", palette = c("#0072B2", "#E69F00"),
+          add = "jitter", add.params = list(alpha = 1))
+
+ggplot(filter(df, stage == "suckling"), 
+       aes(x = as.factor(observed), y = predict, color = birth_weight)) +
+    geom_boxplot(outlier.shape = NA)+
+    scale_color_manual(values = c("#0072B2", "#E69F00"))+
+  labs(x="Chronological age (days)",
+       y="Microbiota age (days)",
+       color="")+
+  theme_bw()+
+  theme(legend.position = c(.8,.2),
+        legend.background = element_rect(fill = "transparent"))
+
+# ggsave("output/rf_suck.pdf", width = 5, height = 5)
+```
+
+```{r}
+ggboxplot(filter(df, stage == "weaning"), x = "observed", y = "predict", 
+          color = "birth_weight", palette = c("#0072B2", "#E69F00"),
+          add = "jitter", add.params = list(alpha = 1),
+          shape = "treatment")
+```
+
+
+```{r}
+data_wean_age <- df %>% filter(stage == "weaning") %>% 
+  group_by(age, birth_weight, treatment) %>% 
+  summarise(mean_pred = mean(predict, na.rm=TRUE),
+            sem_pred = sd(predict, na.rm=TRUE)/sqrt(n()))
+
+ggplot(data_wean_age, aes(as.character(age), mean_pred, group = interaction(birth_weight, treatment), color = birth_weight)) +
+  geom_errorbar(aes(ymin = mean_pred - sem_pred, ymax = mean_pred + sem_pred),
+                width = 0.5, lwd = 0.5, position = position_dodge(0.5), alpha = .5) +
+  geom_line(aes(linetype = treatment), lwd = 1, position = position_dodge(0.5)) +
+  geom_point(aes(shape = treatment), size = 2.5, position = position_dodge(0.5)) +
+  scale_linetype_manual(values = c("solid", "dashed"))+
+  scale_color_manual(values = c("#0072B2", "#E69F00"))+
+  xlab("Choronological Age (Days)")+
+  ylab("Microbiota Age (Days)")+
+  ylim(c(16,46))+
+  theme_bw()+
+  # guides(shape = FALSE, linetype = FALSE)+
+  theme(legend.position = c(.8,.2), legend.title = element_blank(), legend.box = "honrizontal",
+        legend.background = element_rect(fill = "transparent", size = 1, linetype = "solid")) 
+  # geom_text(aes(label = "                         P value\nbirth_weight        0.03\nage                 <2e-16\ntreatment            0.10", x = 2, y = 41), 
+  #       color = "black", size = 4, font = "plain")
+# ggsave("output/RF_wean.pdf")
+```
+
+```{r}
+ggplot(filter(data_wean_age, treatment == "CON"), aes(as.character(age), mean_pred, group = birth_weight, color = birth_weight)) +
+  geom_errorbar(aes(ymin = mean_pred - sem_pred, ymax = mean_pred + sem_pred),
+                width = 0.5, lwd = 0.5, position = position_dodge(0.5), alpha = .5) +
+  geom_line(aes(linetype = "dashed"), lwd = 1, position = position_dodge(0.5)) +
+  geom_point(aes(shape = "triangle"), size = 2.5, position = position_dodge(0.5)) +
+  scale_shape_manual(values = c(triangle = 17)) +
+  scale_linetype_manual(values = "dashed") +
+  geom_signif(annotations = c("0.001","0.09","0.005","0.06","0.01","0.009"),
+              y_position = c(33,36, 38,39, 41, 46),
+              xmin = c(2.9,3.9, 4.9,5.9, 7.9, 11.9),
+              xmax = c(3.1,4.1, 5.1,6.1, 8.1, 12.1),
+              colour = "black")+
+  scale_color_manual(values = c("#0072B2", "#E69F00"))+
+  xlab("Choronological Age (Days)") +
+  ylab("Microbiota Age (Days)") +
+  ylim(c(16,46))+
+  theme_bw()+
+  guides(shape = FALSE, linetype = FALSE)+
+  theme(legend.position = c(.8,.2), legend.title = element_blank(), 
+        legend.background = element_rect(fill = "transparent", size = 1, linetype = "solid"))
+# ggsave("output/RF_CONonly.pdf")
+```
+
+
+
+```{r}
+ggplot(filter(data_wean_age, treatment == "AB"), aes(as.character(age), mean_pred, group = birth_weight, color = birth_weight)) +
+  geom_errorbar(aes(ymin = mean_pred - sem_pred, ymax = mean_pred + sem_pred),
+                width = 0.5, lwd = 0.5, position = position_dodge(0.5), alpha = .5) +
+  geom_line(aes(linetype = "dashed"), lwd = 1, position = position_dodge(0.5)) +
+  geom_point(aes(shape = "triangle"), size = 2.5, position = position_dodge(0.5)) +
+  scale_shape_manual(values = c(triangle = 16)) +
+  scale_linetype_manual(values = "solid") +
+  scale_color_manual(values = c("#0072B2", "#E69F00"))+
+  xlab("Choronological Age (Days)") +
+  ylab("Microbiota Age (Days)") +
+  ylim(c(16,46))+
+  theme_bw()+
+  guides(shape = FALSE, linetype = FALSE)+
+  theme(legend.position = c(.8,.2), legend.title = element_blank(), 
+        legend.background = element_rect(fill = "transparent", size = 1, linetype = "solid"))
+# ggsave("output/RF_ABonly.pdf")
+```
+
+```{r}
+ggplot(filter(data_wean_age, birth_weight == "LBW"), aes(as.character(age), mean_pred, group = treatment)) +
+  geom_errorbar(aes(ymin = mean_pred - sem_pred, ymax = mean_pred + sem_pred),
+                width = 0.5, lwd = 0.5, position = position_dodge(0.5), alpha = .5, color = "#0072B2") +
+  geom_line(aes(linetype = treatment), lwd = 1, position = position_dodge(0.5), color = "#0072B2") +
+  geom_point(aes(shape = treatment), size = 2.5, position = position_dodge(0.5),color = "#0072B2") +
+  scale_shape_manual(values = c(17, 16)) +
+  scale_linetype_manual(values = c("solid","dashed")) +
+    geom_signif(annotations = c("0.09","0.02"),
+              y_position = c(38, 41),
+              xmin = c(6.9, 8.9),
+              xmax = c(7.1, 9.1),
+              colour = "black")+
+  xlab("Choronological Age (Days)") +
+  ylab("Microbiota Age (Days)") +
+  ylim(c(16,46))+
+  theme_bw()+
+  guides()+
+  theme(legend.position = c(.8,.2), legend.title = element_blank(),
+      legend.background = element_rect(fill = "transparent", size = 1, linetype = "solid"))
+# ggsave("output/RF_LBWonly.pdf")
+```
+
+```{r}
+ggplot(filter(data_wean_age, birth_weight == "NBW"), aes(as.character(age), mean_pred, group = treatment)) +
+  geom_errorbar(aes(ymin = mean_pred - sem_pred, ymax = mean_pred + sem_pred),
+                width = 0.5, lwd = 0.5, position = position_dodge(0.5), alpha = .5, color = "#E69F00") +
+  geom_line(aes(linetype = treatment), lwd = 1, position = position_dodge(0.5), color = "#E69F00") +
+  geom_point(aes(shape = treatment), size = 2.5, position = position_dodge(0.5),color = "#E69F00") +
+  scale_shape_manual(values = c(17, 16)) +
+  scale_linetype_manual(values = c("solid","dashed")) +
+    geom_signif(annotations = c("0.06","0.04"),
+              y_position = c(38, 41),
+              xmin = c(2.9, 6.9),
+              xmax = c(3.1, 7.1),
+              colour = "black")+
+  xlab("Choronological Age (Days)") +
+  ylab("Microbiota Age (Days)") +
+  ylim(c(16,46))+
+  theme_bw()+
+  guides()+
+  theme(legend.position = c(.8,.2), legend.title = element_blank(),
+      legend.background = element_rect(fill = "transparent", size = 1, linetype = "solid"))
+# ggsave("output/RF_NBWonly.pdf")
+```
+
+
+
+
+# statistics for microbiota age
+
+```{r, include=FALSE}
+library(tidyverse)
+library(qiime2R)
+library(ggpubr)
+library(ggsci)
+library(lme4)
+library(emmeans)
+library(afex)
+library(multcomp)
+library(ggbeeswarm)
+library(summarytools)
+library(interactions)
+library(jtools)
+```
+
+
+```{r data split, include=FALSE}
+datas = df
+set_sum_contrasts() # important for afex
+# View(datas)
+# str(datas) # summary of the types of variables and their values
+
+datas$pig_id <- as.factor(datas$pig_id)
+datas$sow_id <- as.factor(datas$sow_id)
+datas$treatment <- as.factor(datas$treatment)
+datas$birth_weight <- as.factor(datas$birth_weight)
+datas$sex <- as.factor(datas$sex)
+datas$age <- as.factor(datas$age)
+datas$stage <- as.factor(datas$stage)
+datas$group <- as.factor(datas$group)
+datas$age_group <- as.factor(datas$age_group)
+
+str(datas)
+
+data_suck <- filter(datas, stage == "suckling")
+data_wean <- filter(datas, stage == "weaning")
+```
+
+# roughtly check day by day 
+
+```{r suck}
+ages <- unique(data_suck$age)
+idx <- "predict"
+for (i in ages){
+  data <- filter(data_suck, age == i)
+  print(paste0('day',i))
+  for (j in idx){
+    print(j)
+    model = wilcox.test(data[[j]] ~ birth_weight,data=data, exact=FALSE)
+    print(model$p.value)
+  }
+  print("")
+}
+
+```
+
+```{r wean}
+ages <- unique(data_wean$age)
+idx <- "predict"
+
+for (i in ages){
+  data <- filter(data_wean, age == i)
+  print(paste0('day',i))
+  for (j in idx){
+    print(j)
+    model = glm(data[[j]] ~ birth_weight*treatment, data=data)
+    print(summary(model))
+    #print(summary(model)$coefficients[,4])
+  }
+  print("")
+}
+```
+
+# suckling stage
+
+## microbiota age
+```{r microbiota age}
+# full model
+m1 <- mixed(
+  predict ~ birth_weight*age+sex+(birth_weight*age|sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The first model with random intercepts, random slopes, multiplicative effects, 
+# and correlations between slopes and intercepts led to an error.
+
+# removing correlations between slopes and intercepts
+m2 <- mixed(
+  predict ~ birth_weight*age+sex+(birth_weight*age||sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The second model with random intercepts, random slopes, and  multiplicative effects 
+# (but no correlations between slopes and intercepts) 
+# led to a model that failed to converge with 2 negative eigenvalues: -5.6e-04 -1.4e-02
+
+# removing multiplicative nature of associations of within-subject factors
+m3 <- mixed(
+  predict ~ birth_weight*age+sex+(birth_weight+age||sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The third model with random intercepts, random slopes, and additive effects 
+# (but no correlations between slopes and intercepts and no multiplicative effects) 
+# did not yield any warning messages.
+
+# removing multiplicative nature of associations of within-subject factors, but adding correlations between slopes and intercepts
+m4 <- mixed(
+  predict ~ birth_weight*age+sex+(birth_weight+age|sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The fourth model with random intercepts, random slopes, additive effects,
+# correlations between slopes and intercepts (but no multiplicative effects)
+# led to an error.
+
+# removing pretty much everything but keeping random intercepts and within-subject factor slopes
+m5 <- mixed(
+  predict ~ birth_weight*age+sex+(age||sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# the 5th model did not yield any warning messages.
+```
+
+```{r microbiota age check}
+anova(m2)
+anova(m3)
+anova(m5)
+# Given that qualitatively the results of models m2 m3 m5 were matched, 
+# we decided to present the results of the m2 due to its stability.
+```
+
+```{r microbiota age model}
+# we explore the results with M2
+
+# all the elements within object M2
+str(m2)
+# we  check for the homogeneity of variances 
+plot(m2$full_model)
+# this is for testing the normality of the residuals
+qqnorm(residuals(m2$full_model))
+# we now explore the random structure in more detail
+summary (m2$full_model)
+# we can see the intercepts of each individual with this line of code (baseline eyemovement)
+coef(m2$full_model)
+```
+
+```{r microbiota age posthoc1}
+
+model_suckling <- m2
+emm_options(lmer.df = "kenward-roger")
+emm_int1 <- emmeans(model_model_suckling, "birth_weight", by = c("age"), model = "multivariate")
+emm_int1
+pairs(emm_int1, adjust = "BH")
+```
+
+# weaning stage
+## M age wean
+```{r M age_w}
+# full model
+m1 <- mixed(
+  predict ~ birth_weight*age*treatment+sex+(birth_weight*age*treatment|sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The first model with random intercepts, random slopes, multiplicative effects, 
+# and correlations between slopes and intercepts led to an error.
+
+# removing correlations between slopes and intercepts
+m2 <- mixed(
+  predict ~ birth_weight*age*treatment+sex+(birth_weight*age*treatment||sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The second model with random intercepts, random slopes, and  multiplicative effects 
+# (but no correlations between slopes and intercepts) 
+# led to a model that failed to converge with 5 negative eigenvalues: -7.6e-03 -7.7e-03 -7.7e-03 -1.3e-01 -2.3e-01
+
+# removing multiplicative nature of associations of within-subject factors
+m3 <- mixed(
+  predict ~ birth_weight*age*treatment+sex+(birth_weight+age+treatment||sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The third model with random intercepts, random slopes, and additive effects 
+# (but no correlations between slopes and intercepts and no multiplicative effects) 
+# did not yield any warning messages
+
+# removing multiplicative nature of associations of within-subject factors, but adding correlations between slopes and intercepts
+m4 <- mixed(
+  predict ~ birth_weight*age*treatment+sex+(birth_weight+age+treatment|sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The fourth model with random intercepts, random slopes, additive effects,
+# correlations between slopes and intercepts (but no multiplicative effects)
+# led to an error.
+
+# removing pretty much everything but keeping random intercepts and within-subject factor slopes
+m5 <- mixed(
+  predict ~ birth_weight*age*treatment+sex+(age||sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# the 5th model did not yield any warning messages.
+```
+
+```{r M age_w check}
+anova(m2)
+anova(m3)
+anova(m5)
+
+# we decided to present the results of the m3 due to its stability.
+```
+
+```{r M age_w model}
+# we explore the results with M5
+
+# all the elements within object M5
+str(m3)
+# we  check for the homogeneity of variances 
+plot(m3$full_model)
+# this is for testing the normality of the residuals
+qqnorm(residuals(m3$full_model))
+# we now explore the random structure in more detail
+summary (m3$full_model)
+# we can see the intercepts of each individual with this line of code (baseline eyemovement)
+coef(m3$full_model)
+```
+
+```{r M age_w posthoc1}
+
+emm_options(lmer.df = "kenward-roger")
+emm_int1 <- emmeans(m3, "birth_weight", by = c("age", "treatment"), model = "multivariate")
+emm_int1
+pairs(emm_int1, adjust = "BH")
+```
+
+```{r M age_w posthoc2}
+
+emm_options(lmer.df = "kenward-roger")
+emm_int2 <- emmeans(m3, "age", by = c("birth_weight", "treatment"), model = "multivariate")
+emm_int2
+pairs(emm_int2, adjust = "BH")
+```
+
+```{r M age_w posthoc3}
+
+emm_options(lmer.df = "kenward-roger")
+emm_int3 <- emmeans(m3, "treatment", by = c("birth_weight", "age"), model = "multivariate")
+emm_int3
+pairs(emm_int3, adjust = "BH")
+```
+
+## save models
+```{r}
+save(model_suckling, m2, m3, m5, file = "m_age_models.rda")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,443 @@
+---
+title: "DMM_cluster"
+author: "Wenxuan Dong"
+date: "2023-04-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r package, include=FALSE}
+library(tidyverse)
+library(qiime2R)
+library(ggsci)
+library(microbiome)
+library(DirichletMultinomial)
+library(reshape2)
+```
+
+```{r, include=FALSE}
+meta <- read.table("sample-metadata.tsv", sep = "\t", header = TRUE)
+row.names(meta) <- meta$sample.id
+ass1 <- read.table("ass1.txt", header = T, row.names = 1) # rarefaction level
+
+# merge
+merge <- merge(meta, ass1, by=0, all.x = F) # ass1 / ass
+row.names(merge) <- merge$Row.names
+merge$dmm <- merge$ass1
+
+merge$age <- as.factor(merge$age)
+# merge$dmm <- factor(merge$dmm, 
+#                     levels = c("5","3","7","4","6","1","2"))
+merge$dmm <- factor(merge$dmm, 
+                    levels = c("5","2","4","3","1"))
+merge <- mutate(merge, dmmm = ifelse(dmm == 5, "NB1",
+                                     ifelse(dmm == 2, "NB2",
+                                            ifelse(dmm == 4, "NB3", 
+                                                   ifelse(dmm == 3, "PW1", "PW2")))))
+
+# write.table(merge, file = "dmm1.txt", quote = F, sep = "\t", row.names = F, col.names = T)
+```
+
+
+```{r}
+
+dmm1 <- read.table("dmm1.txt", quote = "\t", header = TRUE)
+dmm1 <- mutate(dmm1, dmmm = ifelse(dmm == 5, "NB1",
+                                     ifelse(dmm == 2, "NB2",
+                                            ifelse(dmm == 4, "NB3", 
+                                                   ifelse(dmm == 3, "PW1", "PW2")))))
+
+
+ggplot(dmm1, aes(as.factor(pig_id), as.factor(age)))+
+  geom_tile(aes(fill = dmmm), colour = "white")+
+  #scale_fill_manual(values = my_color) +
+  facet_wrap(vars(birth_weight, treatment),
+             scales = "free")+
+  geom_hline(yintercept = 9.5,colour='black',linetype="dashed")+
+  labs(x = "Pig id", y = "Age (days)", fill = "DMM")+
+  theme_minimal()
+  # theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5))
+  # theme(axis.title.x = element_blank(),
+  #       legend.title = element_blank(),
+  #       legend.text = element_blank())
+
+# ggsave("output/dmm_pigid.pdf")
+```
+
+```{r}
+df <- filter(dmm1, stage == "weaning") %>% 
+  select(pig_id, dmmm, birth_weight, treatment, group) %>% 
+  group_by(pig_id, dmmm, birth_weight, treatment, group) %>% 
+  count() %>% 
+  pivot_wider(names_from = dmmm, values_from = n) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(total = NB2+NB3+PW1+PW2) %>% 
+  mutate(PW2percent = PW2/total)
+
+
+
+model <- glm(PW2percent ~ birth_weight*treatment, data = df)
+summary(model)
+
+kruskal.test(PW2percent ~ group, data = df)
+```
+```{r}
+df2 <- filter(dmm1, stage == "weaning") %>% 
+  select(pig_id, dmmm, group) %>% 
+  group_by(pig_id, dmmm, group) %>% 
+  count() %>% 
+  pivot_wider(names_from = dmmm, values_from = n) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(others = NB2+NB3+PW1) %>% 
+  select(group, PW2, others) %>% 
+  ungroup() %>% 
+  select(-1) %>% 
+  pivot_longer(-group) %>%
+  group_by(group, name) %>% 
+  summarise(total = sum(value)) %>% 
+  pivot_wider(names_from = group, values_from = total) %>% 
+  column_to_rownames(var="name")
+
+
+chisq.test(df2)
+```
+```{r}
+# post-hoc for chi-square
+# install.packages("rcompanion")
+# install.packages("D:/R/rcompanion_2.4.30.zip", type = "source")
+
+library(rcompanion)
+library("chisq.posthoc.test")
+
+result <- chisq.test(df2)
+print(result)
+# # Extract the observed counts
+# observed <- result$observed
+# proportions <- observed / sum(observed)
+# posthoc <- pairwise.prop.test(observed, p.adjust.method = "bonferroni")
+# 
+
+posthoc_result <- chisq.posthoc.test(df2, method = "BH")
+print(posthoc_result)
+
+# library(devtools)
+# install_github("dustinfife/fifer")
+# library(fifer)
+# chisq.post.hoc(df2, test='chisq.test')
+```
+
+
+```{r}
+dmm11 <- filter(dmm1, age > 34)
+dmm11$pig_id <- factor(dmm11$pig_id, 
+                          levels = c('23','8','26','10','44',
+                          '35','17','16','47','2',
+                          '4','29','46','31','32',
+                          '24','27','1','42','7',
+                          '20','22','9','21','36',
+                          '15','5','37','13','12',
+                          '33','41','11','14','40',
+                          '48','3','25','28','45',
+                          '39','38','34','18')) 
+
+ggplot(dmm11, aes(pig_id, as.factor(age)))+
+  geom_tile(aes(fill = dmmm),, colour = "white")+
+  #scale_fill_manual(values = my_color) +
+  # facet_wrap(vars(birth_weight, treatment),
+  #            scales = "free")+
+  geom_hline(yintercept = 9.5,colour='black',linetype="dashed")+
+  scale_fill_manual(values=c("#00B0F6","#E76BF3"))+
+  labs(x = "Pig id (increasing community variability ===>)", y = "Age (days)", fill = "DMM")+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5))
+
+#ggsave("output/dmm_pigid_variation.pdf", width = 7, height = 2)
+```
+
+
+
+```{r}
+ggplot(dmm1, aes(as.factor(pig_id), dmmm))+
+  stat_sum() +
+  #geom_tile(aes(fill = dmmm),, colour = "grey40")+
+  #scale_fill_manual(values = my_color) +
+  facet_wrap(vars(birth_weight, treatment),
+             scales = "free")+
+  labs(x = "Pig id", y = "DMM clusters")+
+  #geom_hline(yintercept = 9.5,colour='black',linetype="dashed")+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5))
+# ggsave("output/dmm_pigid_count.pdf")
+```
+
+
+```{r}
+dmm_sum <- read.table("dmm1_sum.txt", header = T) 
+ggplot(filter(dmm_sum, stage == "suckling"), aes(x = dmm, y = value, fill = group))+
+  geom_bar(position="dodge", stat="identity")+
+  labs(x="",y="Number of samples")+
+  theme_bw()
+#ggsave("output/dmm_suck_dodge.pdf", width = 4, height = 4)
+ggplot(dmm_sum[15:30,], aes(x = dmm, y = value, fill = group))+
+  geom_bar(position="dodge", stat="identity")+
+  labs(x="",y="Number of samples")+
+  theme_bw()
+#ggsave("output/dmm_wean_dodge.pdf", width = 4, height = 4)
+```
+
+
+```{r}
+my_color <- c("#00D979","#7FCD00","#3DC1FF","#00D5FA","#F9A80F")
+ggplot(merge, aes(x=age, y=dmmm, color=dmm))+
+  scale_size_continuous(range = c(1,6))+
+  stat_sum() + 
+  scale_color_manual(values = my_color) +
+  coord_flip() +
+  labs(y = "DMM cluster", x = "Days postnatal")+
+  theme_bw()
+
+# ggsave("output/dmm_transition.pdf", width = 8, height = 7)
+```
+
+```{r}
+meta <- read.table("alpha_vector.tsv", sep = '\t', header = TRUE)
+
+row.names(meta) <- meta$sample.id
+merge2 = inner_join(merge, select(meta, sample.id, faith_pd:chao1))
+
+```
+```{r}
+kruskal.test(faith_pd ~ dmmm, data=merge2)
+# multiple comparison
+pair_faith <- pairwise.wilcox.test(merge2$faith_pd, merge2$dmmm, p.adjust.method="BH")
+
+write.table(pair_faith$p.value, 'output/dmm_faith_p.txt', quote = F,
+            sep = '\t', row.names = T)
+```
+
+
+```{r}
+ggplot(merge2, aes(dmmm, faith_pd,,color = dmmm)) + 
+  geom_boxplot() + 
+  stat_boxplot(geom = "errorbar",aes(ymin=..ymax..),
+               width=0.2,color=my_color)+
+  stat_boxplot(geom = "errorbar",aes(ymax=..ymin..),
+               width=0.2,color=my_color) +
+  theme_bw() +
+  theme(legend.title = element_blank(),
+        legend.position = "none") + 
+  scale_color_manual(values = my_color) +
+  labs(y="Faith Phylogenetic Diversity", x = "DMM cluster")
+
+ggsave("output/dmm_faith.pdf")
+```
+
+
+
+```{r}
+# load("fit1.RData")
+# fit = fit1
+# 
+# lplc <- base::sapply(fit, DirichletMultinomial::laplace)
+# aic  <- base::sapply(fit, DirichletMultinomial::AIC) # AIC / BIC / Laplace
+# bic  <- base::sapply(fit, DirichletMultinomial::BIC) # AIC / BIC / Laplace
+# 
+# best <- fit[[5]]
+# mixturewt(best)
+# 
+# ass1 <- apply(mixture(best), 1, which.max)
+# ass1 <- as.data.frame(ass1)
+# write.table(ass1, file = "ass1.txt", quote = F, sep = "\t", row.names = T, col.names = T)
+```
+
+
+```{r}
+mixturewt(best)
+taxonomy<-read_qza("qiime_out/taxonomy.qza")
+tax.clean<-parse_taxonomy(taxonomy$data)
+# head(tax.clean)
+tax.clean$OTU <- row.names(tax.clean)
+
+
+for (k in seq(ncol(fitted(best)))) {
+  d <- melt(fitted(best))
+  colnames(d) <- c("OTU", "cluster", "value")
+  d <- subset(d, cluster == k) %>%
+    # Arrange OTUs by assignment strength
+    arrange(value) %>%
+    mutate(OTU = factor(OTU, levels = unique(OTU))) %>%
+    # Only show the most important drivers
+    filter(abs(value) > quantile(abs(value), 0.8))
+
+  d <- left_join(d, tax.clean)
+
+  write.table(d, file = paste0('dmm/','cluster', k, ".txt"),quote = F, sep = "\t",row.names = F)
+}
+```
+
+# Heatmap
+```{r}
+table <- read_qza("qiime_out/rarefied_table.qza")
+otu_table <- as.data.frame(table$data) %>% 
+  filter_features(14,2)
+
+options(scipen =200, digits = 4)
+otu_table <- prop.table(data.matrix(otu_table),2)
+otu_table <- as.data.frame(otu_table)
+# otu_table <- otu_table[apply(otu_table, 1, function(x) max(x) > 0.001),]
+otu_table$OTUons <- paste0("Feature",1:nrow(otu_table))
+otu_table$OTUstring <- rownames(otu_table)
+otu_key <- select(otu_table, OTUons:OTUstring)
+otu_table <- select(otu_table, -OTUons, -OTUstring)
+
+otu_table_bak <- otu_table
+# otu_table <- otu_table_bak
+
+row.names(merge) <- merge$sample.id
+con <- merge
+con_sample <- row.names(con)
+otu_table <- otu_table[, con_sample]
+
+CLUSTER_COLUMN <- "dmm"
+md <- merge
+
+```
+
+```{r}
+anno <- md[colnames(otu_table), CLUSTER_COLUMN, drop=FALSE]
+anno[[CLUSTER_COLUMN]] <- factor(anno[[CLUSTER_COLUMN]])
+anno <- anno[order(anno[[CLUSTER_COLUMN]]), , drop=FALSE]
+
+# annotation for each taxa
+top_driver <- read.table("dmm/top25driver.txt", sep = "\t", header = T)
+top50 <- top_driver$OTU
+top_driver <- inner_join(top_driver,otu_key, by=c("OTU"="OTUstring"))%>%
+  tidyr::unite(top50_anno, OTUons, Genus, sep="-")
+# top50_anno <- str_replace(top_driver$top50_anno, "Feature", "")
+top50_anno <- top_driver$Species
+# color gradients
+colors <- colorRampPalette(rev(RColorBrewer::brewer.pal(n=7, name="RdYlBu")), bias=3)(100)
+# mat
+mat <- otu_table[top50, rownames(anno), drop=FALSE]
+mat <- t(apply(mat, 1L, scales::rescale))
+
+# ann_colors = list(
+#   dmmm = c("A"="#DC0000FF","B"="#F39B7FFF","C"="#E64B35FF",
+#           "D"="#B09C85FF","E"="#7E6148FF","F"="#8491B4FF",
+#           "G"="#00A087FF","H"="#91D1C2FF","I"="#3C5488FF",
+#           "J"="#4DBBD5FF"),
+#   Phylum = c(Actinobacteria= "#1F77B4FF", Bacteroidetes= "#FF7F0EFF",
+#              Euryarchaeota= "#D62728FF", Firmicutes= "#2CA02CFF",
+#              Proteobacteria= "#E377C2FF"))
+
+# ann_row <- data.frame(Phylum = top_driver$Phylum,
+#                       dmm = factor(rep(c("5", "2", "4", "3", "1"), 
+#                                        c(5,5,5,5,5))))
+ann_row <- data.frame(Phylum = top_driver$Phylum)
+row.names(ann_row) <- row.names(mat)
+
+pheatmap::pheatmap(
+  mat            = mat, 
+  color          = colors,   #uncheck if setting the colour scale manual
+  annotation_col = anno,
+  annotation_row = ann_row,
+  #annotation_colors = ann_colors,
+  show_colnames  = FALSE,
+  cluster_rows   = TRUE,
+  cluster_cols   = FALSE,
+  gaps_col       = cumsum(unname(table(anno[[CLUSTER_COLUMN]]))),
+  gaps_row       = c(5,10,15,20,25),
+  labels_row     = top50_anno,
+  cellwidth = 0.25, cellheight = 12, fontsize = 7, filename = "dmm/dmm_heatmap7.pdf")
+
+```
+
+# Markov Chain
+```{r}
+library(phyloseq)
+library(igraph)
+library(markovchain)
+```
+
+
+```{r}
+dmm1 <- read.table("dmm1.txt", header = T, row.names = 1, na.strings = "NA")
+
+dmm1$CurCST <- replace(dmm1$CurCST, dmm1$CurCST == 5, "NB1")
+dmm1$CurCST <- replace(dmm1$CurCST, dmm1$CurCST == 2, "NB2")
+dmm1$CurCST <- replace(dmm1$CurCST, dmm1$CurCST == 4, "NB3")
+dmm1$CurCST <- replace(dmm1$CurCST, dmm1$CurCST == 3, "PW1")
+dmm1$CurCST <- replace(dmm1$CurCST, dmm1$CurCST == 1, "PW2")
+dmm1$PrevCST <- replace(dmm1$PrevCST, dmm1$PrevCST == 5, "NB1")
+dmm1$PrevCST <- replace(dmm1$PrevCST, dmm1$PrevCST == 2, "NB2")
+dmm1$PrevCST <- replace(dmm1$PrevCST, dmm1$PrevCST == 4, "NB3")
+dmm1$PrevCST <- replace(dmm1$PrevCST, dmm1$PrevCST == 3, "PW1")
+dmm1$PrevCST <- replace(dmm1$PrevCST, dmm1$PrevCST == 1, "PW2")
+dmm1$dmm <- replace(dmm1$dmm, dmm1$dmm == 5, "NB1")
+dmm1$dmm <- replace(dmm1$dmm, dmm1$dmm == 2, "NB2")
+dmm1$dmm <- replace(dmm1$dmm, dmm1$dmm == 4, "NB3")
+dmm1$dmm <- replace(dmm1$dmm, dmm1$dmm == 3, "PW1")
+dmm1$dmm <- replace(dmm1$dmm, dmm1$dmm == 1, "PW2")
+
+samdf <- dmm1
+samdf_prev <- dmm1
+ttab <- table(samdf_prev$PrevCST, samdf_prev$CurCST) # prevstate=row, curstate=col
+trans <- matrix(ttab, nrow=5) # 5 means 5 clusters
+trans <- trans/rowSums(trans)  # Normalize row sums to 1
+CSTtrans <- trans
+CSTs <- c("NB1","NB2","NB3","PW1","PW2")
+colnames(CSTtrans) <- CSTs
+rownames(CSTtrans) <- CSTs
+t_persist <- -1/log(diag(CSTtrans))
+
+```
+
+
+```{r}
+##plot markov chain
+mcPreg <- new("markovchain", states=CSTs,
+              transitionMatrix = trans, name="PregCST")
+netMC <- markovchain:::.getNet(mcPreg, round = TRUE)
+wts <- E(netMC)$weight/100
+edgel <- get.edgelist(netMC)
+elcat <- paste(edgel[,1], edgel[,2])
+elrev <- paste(edgel[,2], edgel[,1])
+edge.curved <- sapply(elcat, function(x) x %in% elrev)
+default.par <- par(no.readonly = TRUE)
+plotMC <- function(object, ...) {
+  netMC <- markovchain:::.getNet(object, round = TRUE)
+  plot.igraph(x = netMC, ...)  
+}
+
+####### ↓ #######
+vert.sz <- 2*sapply(states(mcPreg), 
+                        function(x) nrow(unique(sample_data(samdf)[sample_data(samdf)$dmm==x,"SampleID"])))
+vert.sz <- log(vert.sz)*5
+vert.font.clrs <- c("black", "black", "black", "black","black")
+edge.loop.angle = c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3.14, 0, 0, 0, 0, 0)-0.45
+layout <- matrix(c(0.6,0.95, 0.43,1, 0.3,0.66, 0.55,0.3, 0.7,0.6), nrow=5, ncol=2, byrow=T)
+#layout(matrix(c(1,1,2,2), 2, 2, byrow = TRUE), heights=c(1,10))
+par(mar=c(0,1,1,1)+0.1)
+edge.arrow.size=.5
+edge.arrow.width=.5
+edge.width = (7*wts + 0.1)
+edge.labels <- as.character(E(netMC)$weight/100)
+edge.labels[edge.labels<0.001] <- NA  # labels only for self-loops
+
+##plot
+plotMC(mcPreg, edge.arrow.size=edge.arrow.size, edge.arrow.width = edge.arrow.width,
+       edge.label = edge.labels, edge.label.font=2, edge.label.cex=1.3, edge.label.color="black",
+       edge.width=edge.width, edge.curved=edge.curved, 
+       vertex.size=(vert.sz),
+       vertex.label.font = 2, vertex.label.cex = 2,
+       vertex.label.color = vert.font.clrs, vertex.frame.color = NA, 
+       vertex.color = c("#00D979","#7FCD00","#3DC1FF","#00D5FA","#F9A80F"),
+       layout = layout, edge.loop.angle = edge.loop.angle)
+
+```
+
+
+

@@ -1,0 +1,225 @@
+---
+title: "Intra_vs_inter"
+author: "Wenxuan Dong"
+date: "2023-06-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+package_list <- c("tidyverse", "qiime2R","ggpubr","ggsci","lme4","afex",
+                  "emmeans", "ICC")
+
+for(p in package_list){
+  if(!suppressWarnings(suppressMessages(require(p, character.only = TRUE, quietly = TRUE, warn.conflicts = FALSE)))){
+    install.packages(p, repos=site)
+    suppressWarnings(suppressMessages(library(p, character.only = TRUE, quietly = TRUE, warn.conflicts = FALSE)))
+  }
+}
+```
+
+```{r}
+# metadata
+meta <- read.table("sample-metadata.tsv", sep = "\t", header = TRUE)
+meta$age <- as.numeric(meta$age)
+row.names(meta) <- meta[ ,1]
+
+taxonomy_genus <-read_qza("qiime_out/table-l6.qza")
+
+genus <- data.frame(taxonomy_genus$data)
+genus_core <- filter_features(genus, ncol(genus)*0.1, 1) 
+# 7 genus kept after 90% filter, 279 genus kept after 10% filter, 120, 20%
+
+genus <- genus+1
+genus_core <- genus_core + 1
+genus <- data.frame(prop.table(data.matrix(genus),2))
+genus <- genus[apply(genus, 1, function(x) mean(x) > 0.0001),]
+genus_core <- data.frame(prop.table(data.matrix(genus_core),2))
+genus_core <- genus_core[apply(genus_core, 1, function(x) mean(x) > 0.001),]
+
+genus_log10 <- apply(genus, 2, log10)
+genus_log10 <- data.frame(t(genus_log10))
+genus_core_log10 <- apply(genus_core, 2, log10)
+genus_core_log10 <- data.frame(t(genus_core_log10))
+
+genus_log10 <- merge(genus_log10, meta, by = "row.names")
+genus_core_log10 <- merge(genus_core_log10, meta, by = "row.names")
+```
+
+```{r warning=FALSE}
+genus_log10 <- filter(genus_log10, age > 34)
+genus_core_log10 <- filter(genus_core_log10, age > 34)
+# for (i in colnames(genus_log10)[2:694]) {
+#   print(i)
+#   a <- ICCest(pig_id, i, genus_log10, CI.type = "T")
+#   print(a)
+# }
+
+
+result <- NULL
+for (i in colnames(genus_core_log10)[2:127]) {
+  avg <- median(genus_core_log10[,i])
+  a <- ICCest(pig_id, i, genus_core_log10, CI.type = "T")
+  a.vart <- a$varw + a$vara
+  values <- data.frame(i, a$ICC, a$LowerCI, a$UpperCI, a$N, a$k, a$varw, a$vara, a.vart, avg)
+  result <- rbind(result, values)
+}
+
+a <- filter(result, avg > -4) # 72 high abundant
+
+#write.table(a, "output/ind_icc.txt", quote = FALSE, sep = "\t", row.names = TRUE)
+
+
+genus_core_log10$pig_id <- as.factor(genus_core_log10$pig_id)
+result2 <- NULL
+for (i in colnames(genus_core_log10)[2:127]) {
+  for (j in unique(genus_core_log10$group)){
+    table <- filter(genus_core_log10, group == j)
+    avg <- median(table[,i])
+    a <- ICCest(pig_id, i, table, CI.type = "T")
+    a.vart <- a$varw + a$vara
+    values <- data.frame(i,j, a$ICC, a$LowerCI, a$UpperCI, a$N, a$k, a$varw, a$vara,a.vart, avg)
+    result2 <- rbind(result2, values)
+  }
+}
+```
+
+
+```{r}
+ggplot(filter(result2, avg > -4), aes(avg,a.vart, color = j))+
+  geom_point()+
+  geom_smooth(method = 'lm', se = FALSE)+
+  labs(x = "log10 relative abundance", y = "Variance in abundance, Total",
+       color = "")+
+  theme_bw()
+#ggsave("output/ind_total.pdf", width = 10, height = 6)
+```
+
+
+```{r}
+  print("NBWCON")
+  a <- filter(result2, j == "NBWCON")
+  a <- filter(result2, avg > -4)
+  print(cor.test(a$a.vart, a$avg, method = "spearman"))
+
+# LBWAB
+# 	Spearman's rank correlation rho
+# 
+# data:  a$a.vart and a$avg
+# S = 5648856, p-value = 8.302e-08
+# alternative hypothesis: true rho is not equal to 0
+# sample estimates:
+#        rho 
+# -0.3068977 
+  
+# [1] "LBWCON"
+# 
+# 	Spearman's rank correlation rho
+# 
+# data:  a$a.vart and a$avg
+# S = 5648856, p-value = 8.302e-08
+# alternative hypothesis: true rho is not equal to 0
+# sample estimates:
+#        rho 
+# -0.3068977   
+
+  
+# [1] "NBWAB"
+# 
+# 	Spearman's rank correlation rho
+# 
+# data:  a$a.vart and a$avg
+# S = 5648856, p-value = 8.302e-08
+# alternative hypothesis: true rho is not equal to 0
+# sample estimates:
+#        rho 
+# -0.3068977  
+  
+# [1] "NBWCON"
+# 
+# 	Spearman's rank correlation rho
+# 
+# data:  a$a.vart and a$avg
+# S = 5648856, p-value = 8.302e-08
+# alternative hypothesis: true rho is not equal to 0
+# sample estimates:
+#        rho 
+# -0.3068977  
+  
+  
+  
+
+a <- filter(result, avg > -4)
+print(cor.test(a$a.vart, a$avg, method = "spearman"))
+
+# 72 most abundant genus, median RA >= 0.1%, present in at least 10% samples
+# 	Spearman's rank correlation rho
+# 
+# data:  a$a.vart and a$avg
+# S = 84020, p-value = 0.002649
+# alternative hypothesis: true rho is not equal to 0
+# sample estimates:
+#        rho 
+# -0.3508907 
+```
+
+
+```{r}
+result <- separate(result, i, into = c("ii", "i"), sep = "g__")
+```
+
+
+
+```{r}
+plot <- ggplot(filter(result, avg > -4), aes(a.vara,a.varw,label = i))+ #color = j,, color = avg
+  geom_point()+
+  geom_abline(slope = 1, intercept = 0, color = "black", linetype = "dashed") +
+  #scale_color_gradient(low = "#DC0000FF", high = "#3C5488FF")+
+  labs(x= "Inter-individual variance", y="Intra-individual variance") +
+  #geom_abline(slope = .5, intercept = 0, color = "red", linetype = "dashed")+
+  #geom_text(filter(result, avg>-2),aes(label = i), size = 2) +
+  geom_text(data = filter(result, avg > -2),hjust = 0, size = 4) +
+  theme_classic()
+#ggsave("output/ind_icc.pdf", width = 10, height = 6)
+ggplotly(plot)
+```
+
+```{r}
+ggplot(filter(result2, avg > -4), aes(j, a.ICC, color = j))+
+  geom_boxplot()+
+  labs(x = "", y= "ICC", color="")+
+  theme_bw()
+
+# ggsave("output/ind_icc_groups.pdf", width = 10, height = 7)
+```
+
+
+
+```{r}
+boxplot(result$a.ICC,frame = FALSE,col = "white")
+print(median(result$a.ICC))  #0.3531036
+```
+
+```{r}
+boxplot(a.ICC ~ j, data = result2)
+aov <- aov(a.ICC ~ j, data = result2)
+summary(aov)
+#              Df Sum Sq Mean Sq F value Pr(>F)
+# j             3  0.148 0.04926   0.992  0.396
+# Residuals   500 24.821 0.04964  
+```
+
+```{r}
+kruskal.test(a.ICC ~ j, data = result2)
+
+# The Kruskal-Wallis test is a non-parametric statistical test used to determine if there are 
+# differences between the medians of three or more groups. It is an extension of the Wilcoxon
+# rank-sum test (Mann-Whitney U test) for comparing two groups.
+
+# 	Kruskal-Wallis rank sum test
+# 
+# data:  a.ICC by j
+# Kruskal-Wallis chi-squared = 3.2371, df = 3, p-value = 0.3565
+```
+
+

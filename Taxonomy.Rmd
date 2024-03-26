@@ -1,0 +1,297 @@
+---
+title: "Taxonomy"
+author: "Wenxuan Dong"
+date: "2023-04-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load package, include=FALSE}
+library(qiime2R)
+library(phyloseq)
+library(zoo)
+library(tidyverse)
+library(ggsci)
+library(betareg)
+```
+
+```{r phylum level, include=FALSE}
+# metadata
+meta <- read.table("sample-metadata.tsv", sep = "\t", header = TRUE)
+meta$age <- as.numeric(meta$age)
+row.names(meta) <- meta[ ,1]
+
+taxonomy<-read_qza("qiime_out/table-l2.qza")
+# head(taxonomy$data)
+
+taxa <- data.frame(taxonomy$data)
+taxa <- data.frame(prop.table(data.matrix(taxa),2))
+
+# # check if columns sum to 1
+# colSums(taxa)
+
+# filter high abundance taxa
+taxa <- taxa[apply(taxa, 1, function(x) mean(x) > 0.015),]
+
+# high abundance taxa represent 93.48% of all 
+mean(colSums(taxa))
+
+taxa$tax <- row.names(taxa)
+taxa$tax <- str_replace(taxa$tax, "d__Bacteria;p__","")
+taxa$tax <- str_replace(taxa$tax, "d__Archaea;p__","")
+
+row.names(taxa) <- taxa$tax
+taxa <- taxa[, -ncol(taxa)]
+# str(taxa)
+
+taxa <- t(taxa)
+taxa <- data.frame(taxa)
+taxa <- merge(taxa, meta, by=0, all.x=T)
+
+row.names(taxa) <- taxa$Row.names
+taxa <- taxa[,-1]
+
+taxa <- pivot_longer(taxa, -(sample.id:FG), names_to = "phylum", values_to = "ra")
+
+ggplot(taxa, aes(age, ra, color=phylum))+
+  geom_smooth(method = "loess")+
+  scale_color_npg()+   
+  theme_classic()+
+  xlab("Age (Days postnatal)")+
+  ylab("Relative abundance")+
+  ylim(c(0,.5))+
+  theme(legend.position = c(.5,.85),
+        legend.direction = "horizontal",
+        legend.box = "horizontal",
+        legend.background = element_rect(fill = "transparent"))+ # color = "black", 
+  labs(color = NULL)
+
+ggsave("output/taxa_phylum.pdf", width = 8, height = 6)
+```
+
+
+```{r}
+# metadata
+meta <- read.table("sample-metadata.tsv", sep = "\t", header = TRUE)
+meta$age <- as.numeric(meta$age)
+row.names(meta) <- meta[ ,1]
+
+taxonomy<-read_qza("qiime_out/ko_metagenome.qza")
+# head(taxonomy$data)
+
+# head(taxonomy$data)
+
+taxa <- data.frame(taxonomy$data)
+
+taxa <- taxa[, row.names(meta)]
+taxa <- replace(taxa, is.na(taxa), 0)
+
+taxa <- taxa[, colSums(taxa) > 9000000] # pathway_abundance.qza 1000000;ko_metagenome.qza 9000000 ec_metagenome.qza 5000000
+# colSums(taxa)
+# rowSums(taxa)
+# mean(rowSums(taxa))
+# mean(colSums(taxa))
+
+taxa <- data.frame(prop.table(data.matrix(taxa),2))
+# taxa <- replace(taxa, is.na(taxa), 0)
+# # check if columns sum to 1
+# colSums(taxa)
+
+# filter high abundance taxa
+taxa <- taxa[apply(taxa, 1, function(x) mean(x) > 0.0035),] # pathway_abundance.qza 0.0085;ko_metagenome.qza 0.0035 ec_metagenome.qza 5000000
+# taxa <- data.frame(prop.table(data.matrix(taxa),2))
+# high abundance taxa represent 93.48% of all 
+mean(colSums(taxa))
+mean(rowSums(taxa))
+
+taxa$tax <- row.names(taxa)
+# taxa$tax <- str_replace(taxa$tax, "d__Bacteria;p__","")
+# taxa$tax <- str_replace(taxa$tax, "d__Archaea;p__","")
+
+row.names(taxa) <- taxa$tax
+taxa <- taxa[, -ncol(taxa)]
+# str(taxa)
+
+taxa <- t(taxa)
+taxa <- data.frame(taxa)
+taxa <- merge(taxa, meta, by=0, all.x=T)
+
+row.names(taxa) <- taxa$Row.names
+taxa <- taxa[,-1]
+
+taxa <- pivot_longer(taxa, -(sample.id:FG), names_to = "phylum", values_to = "ra")
+
+ggplot(taxa, aes(age, ra, color=phylum))+
+  geom_smooth(method = "loess", se = FALSE)+
+  scale_color_npg()+   
+  theme_classic()+
+  xlab("Age (Days postnatal)")+
+  ylab("Relative abundance")+
+  #ylim(c(0,.0055))+
+  theme(legend.position = c(.5,.85),
+        legend.direction = "horizontal",
+        legend.box = "horizontal",
+        legend.background = element_rect(fill = "transparent"))+ # color = "black", 
+  labs(color = NULL)
+
+# ggsave("output/taxa_phylum.pdf", width = 8, height = 6)
+```
+
+
+```{r}
+taxonomy_genus <-read_qza("qiime_out/table-l6.qza")
+
+genus <- data.frame(taxonomy_genus$data)
+genus <- data.frame(prop.table(data.matrix(genus),2))
+
+# # check if columns sum to 1
+# colSums(genus)
+
+genus <- genus[apply(genus, 1, function(x) mean(x) > 0.025),]
+# high abundance taxa represent 43.28% of all 
+mean(colSums(genus))
+
+genus$tax <- row.names(genus)
+genus$tax <- str_replace(genus$tax, "d__.*g__","")
+
+row.names(genus) <- genus$tax
+
+genus <- genus[, -ncol(genus)]
+# str(genus)
+genus <- t(genus)
+genus <- data.frame(genus)
+
+genus <- merge(genus, meta, by=0, all.x=T)
+row.names(genus) <- genus$Row.names
+
+genus <- genus[,-1]
+genus <- pivot_longer(genus, -(sample.id:FG), names_to = "genus", values_to = "ra")
+
+
+ggplot(genus, aes(age, ra, color=genus))+
+  geom_smooth(se = FALSE, method = "loess")+
+  scale_color_lancet()+   
+  theme_classic()+
+  xlab("Age (Days postnatal)")+
+  ylab("Relative abundance")+
+  coord_trans(y = "log10") +
+  scale_y_continuous(limits = c(0.01,1), breaks = c(0.01, 0.1, 1)) +
+  theme(legend.position = c(.5,.85),
+        legend.direction = "horizontal",
+        legend.box = "horizontal",
+        legend.background = element_rect(fill = "transparent"))+ # color = "black", 
+  labs(color = NULL)+
+  guides(color = guide_legend(ncol = 3, nrow = 3))
+
+ggsave("output/taxa_genus.pdf", width = 8, height = 6)
+```
+
+```{r}
+bugbase <- read.table("bugbase_predictions.txt", sep = "\t", header = TRUE)
+colnames(bugbase)[1] <- "sample.id"
+
+pheno <- merge(meta, bugbase, by = "sample.id")
+
+pheno <- pivot_longer(pheno, Gram_Negative:Gram_Positive, names_to = "gram", values_to = "ra")
+
+ggplot(pheno, aes(age, ra, color=gram))+
+  geom_smooth(se = TRUE, method = "loess")+
+  scale_color_aaas()+   
+  theme_classic()+
+  xlab("Age (Days postnatal)")+
+  ylab("Relative abundance")+
+  #coord_trans(y = "log10") +
+  #scale_y_continuous(limits = c(0.01,1), breaks = c(0.01, 0.1, 1)) +
+  theme(legend.position = c(.2,.5),
+        legend.direction = "horizontal",
+        legend.box = "horizontal",
+        legend.background = element_rect(fill = "transparent"))+ # color = "black", 
+  labs(color = NULL)+
+  guides(color = guide_legend(ncol = 3, nrow = 3))
+
+ggsave("output/taxa_gram.pdf", width = 8, height = 6)
+```
+
+```{r}
+pheno2 <- merge(meta, bugbase, by = "sample.id")
+
+pheno2 <- pivot_longer(pheno2, Aerobic:Unclassified, names_to = "O2", values_to = "ra")
+
+ggplot(pheno2, aes(age, ra, color=O2))+
+  geom_smooth(se = TRUE, method = "loess")+
+  scale_color_aaas()+   
+  theme_classic()+
+  xlab("Age (Days postnatal)")+
+  ylab("Relative abundance")+
+  #coord_trans(y = "log10") +
+  #scale_y_continuous(limits = c(0.01,1), breaks = c(0.01, 0.1, 1)) +
+  theme(legend.position = c(.2,.5),
+        legend.direction = "horizontal",
+        legend.box = "horizontal",
+        legend.background = element_rect(fill = "transparent"))+ # color = "black", 
+  labs(color = NULL)+
+  guides(color = guide_legend(ncol = 3, nrow = 3))
+
+ggsave("output/taxa_oxygen.pdf", width = 8, height = 6)
+```
+
+
+
+
+
+
+```{r read tables, include=FALSE}
+# # taxonomy mapping table
+# taxonomy <- read_qza("qiime_out/taxonomy.qza")
+# tax.clean <- parse_taxonomy(taxonomy$data)
+# 
+# # phyloseq file
+# physeq <- qza_to_phyloseq(
+#   features="qiime_out/rarefied_table.qza",
+#   tree="qiime_out/rooted-tree.qza",
+#   taxonomy = "qiime_out/taxonomy.qza",
+#   metadata = "sample-metadata.tsv"
+# )
+# 
+# #First get the OTU table from physeq
+# physeq_otu_table <- data.frame(otu_table(physeq), check.names = F)
+# tax.clean = tax.clean[row.names(tax.clean) %in% rownames(physeq_otu_table),]
+# metadata.filtered = meta[row.names(meta) %in% colnames(physeq_otu_table),]
+# #Assign as variables to be feed into phyloseq
+# OTU.physeq = otu_table(as.matrix(physeq_otu_table), taxa_are_rows=TRUE)
+# #our edited and formatted taxonomy table from the top of this script
+# tax.physeq = tax_table(as.matrix(tax.clean))    
+# meta.physeq = sample_data(metadata.filtered)
+# #We then merge these into an object of class phyloseq.
+# physeq_bar_plot = phyloseq(OTU.physeq, tax.physeq, meta.physeq)
+# 
+# # Set colors for plotting
+# my_colors <- c(
+#   '#a6cee3','#1f78b4','#b2df8a','#33a02c','#fb9a99','#e31a1c',
+#   '#fdbf6f','#ff7f00','#cab2d6','#6a3d9a','#ffff99','#b15928', 
+#   "#CBD588", "#5F7FC7", "orange","#DA5724", "#508578", "#CD9BCD",
+#   "#AD6F3B", "#673770","#D14285", "#652926", "#C84248", 
+#   "#8569D5", "#5E738F","#D1A33D", "#8A7C64", "#599861", "gray", "black"
+# )
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

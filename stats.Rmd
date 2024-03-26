@@ -1,0 +1,1010 @@
+---
+title: "Untitled"
+author: "Wenxuan Dong"
+date: "2023-05-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load package, include=FALSE}
+library(tidyverse)
+library(qiime2R)
+library(ggpubr)
+library(ggsci)
+library(lme4)
+library(emmeans)
+library(afex)
+library(multcomp)
+library(ggbeeswarm)
+library(summarytools)
+library(interactions)
+library(jtools)
+```
+
+```{r read tables, include=FALSE}
+meta <- read.table("alpha_vector.tsv", sep = '\t', header = TRUE)
+```
+
+```{r data split, include=FALSE}
+datas = meta
+set_sum_contrasts() # important for afex
+# View(datas)
+# str(datas) # summary of the types of variables and their values
+
+datas$pig_id <- as.factor(datas$pig_id)
+datas$sow_id <- as.factor(datas$sow_id)
+datas$treatment <- as.factor(datas$treatment)
+datas$birth_weight <- as.factor(datas$birth_weight)
+datas$sex <- as.factor(datas$sex)
+datas$age <- as.factor(datas$age)
+datas$stage <- as.factor(datas$stage)
+datas$observed_features <- as.numeric(datas$observed_features)
+
+str(datas)
+
+data_suck <- filter(datas, stage == "suckling")
+data_wean <- filter(datas, stage == "weaning")
+```
+
+```{r hist & qqnorm, fig.show="hide"}
+hist(meta$shannon, main="Shannon diversity", xlab="", breaks=10)
+hist(meta$faith_pd, main="Faith phylogenetic diversity", xlab="", breaks=10)
+hist(meta$pielou_e, main="Evenness", xlab="", breaks=10)
+hist(meta$chao1, main="chao1", xlab="", breaks=10)
+hist(as.numeric(meta$observed_features), main="Observed Features", xlab="", breaks=10)
+ggqqplot(meta$shannon, title = "Shannon")
+ggqqplot(meta$faith_pd, title = "Faith PD")
+ggqqplot(meta$pielou_e, title = "Evenness")
+ggqqplot(meta$chao1, title = "chao1")
+ggqqplot(meta$observed_features, title = "Observed Features")
+```
+
+```{r shapiro test, include=FALSE}
+shapiro.test(data_suck$shannon)
+shapiro.test(data_suck$pielou_e)
+shapiro.test(data_suck$faith_pd)
+shapiro.test(data_suck$chao1)
+shapiro.test(data_suck$observed_features)
+```
+
+# roughly check day by day
+```{r suck}
+ages <- unique(data_suck$age)
+idx <- list("faith_pd","chao1","pielou_evenness","shannon_entropy","observed_features")
+for (i in ages){
+  data <- filter(data_suck, age == i)
+  print(paste0('day',i))
+  for (j in idx){
+    print(j)
+    model = wilcox.test(data[[j]] ~ birth_weight,data=data, exact=FALSE)
+    print(model$p.value)
+  }
+  print("")
+}
+```
+
+```{r wean}
+ages <- unique(data_wean$age)
+idx <- list("faith_pd","chao1","pielou_evenness","shannon_entropy","observed_features")
+
+for (i in ages){
+  data <- filter(data_wean, age == i)
+  print(paste0('day',i))
+  for (j in idx){
+    print(j)
+    model = glm(data[[j]] ~ birth_weight*treatment, data=data, family="quasipoisson")
+    print(summary(model))
+    #print(summary(model)$coefficients[,4])
+  }
+  print("")
+}
+```
+
+# suckling stage
+
+## shannon
+```{r shannon}
+# full model
+m1 <- mixed(
+  shannon_entropy ~ birth_weight*age+sex+(birth_weight*age|sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The first model with random intercepts, random slopes, multiplicative effects, 
+# and correlations between slopes and intercepts led to an error.
+
+# removing correlations between slopes and intercepts
+m2 <- mixed(
+  shannon_entropy ~ birth_weight*age+sex+(birth_weight*age||sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The second model with random intercepts, random slopes, and  multiplicative effects 
+# (but no correlations between slopes and intercepts) 
+# led to a model that failed to converge with 5 negative eigenvalues: -3.0e-03 -3.5e-03 -1.8e-02 -2.8e-02 -1.1e+00
+
+# removing multiplicative nature of associations of within-subject factors
+m3 <- mixed(
+  shannon_entropy ~ birth_weight*age+sex+(birth_weight+age||sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The third model with random intercepts, random slopes, and additive effects 
+# (but no correlations between slopes and intercepts and no multiplicative effects) 
+# led to a model that failed to converge with 2 negative eigenvalues: -1.0e-02 -1.8e+00
+
+# removing multiplicative nature of associations of within-subject factors, but adding correlations between slopes and intercepts
+m4 <- mixed(
+  shannon_entropy ~ birth_weight*age+sex+(birth_weight+age|sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The fourth model with random intercepts, random slopes, additive effects,
+# correlations between slopes and intercepts (but no multiplicative effects)
+# led to an error.
+
+# removing pretty much everything but keeping random intercepts and within-subject factor slopes
+m5 <- mixed(
+  shannon_entropy ~ birth_weight*age+sex+(age||sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# the 5th model did not yield any warning messages.
+```
+
+```{r shannon check}
+anova(m2)
+anova(m3)
+anova(m5)
+# Given that qualitatively the results of models m2 m3 m5 and m6 were matched, 
+# we decided to present the results of the m2 due to its stability.
+```
+
+```{r shannon model}
+# we explore the results with M2
+
+# all the elements within object M2
+str(m2)
+# we  check for the homogeneity of variances 
+plot(m2$full_model)
+# this is for testing the normality of the residuals
+qqnorm(residuals(m2$full_model))
+# we now explore the random structure in more detail
+summary (m2$full_model)
+# we can see the intercepts of each individual with this line of code (baseline eyemovement)
+coef(m2$full_model)
+```
+
+```{r shannon posthoc1}
+model_shannon <- m2
+emm_options(lmer.df = "kenward-roger")
+emm_int1 <- emmeans(model_shannon, "birth_weight", by = c("age"), model = "multivariate")
+emm_int1
+pairs(emm_int1, adjust = "BH")
+```
+
+```{r shannon posthoc2}
+emm_options(lmer.df = "kenward-roger")
+emm_int2 <- emmeans(model_shannon, "age", model = "multivariate")
+emm_int2
+pairs(emm_int2, adjust = "BH")
+```
+
+## chao1
+```{r chao1}
+# full model
+m1 <- mixed(
+  chao1 ~ birth_weight*age+sex+(birth_weight*age|sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The first model with random intercepts, random slopes, multiplicative effects, 
+# and correlations between slopes and intercepts led to an error.
+
+# removing correlations between slopes and intercepts
+m2 <- mixed(
+  chao1 ~ birth_weight*age+sex+(birth_weight*age||sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The second model with random intercepts, random slopes, and  multiplicative effects 
+# (but no correlations between slopes and intercepts) 
+# led to a model that failed to converge with 4 negative eigenvalues: -3.9e-03 -4.9e-03 -9.6e-03 -1.1e-02
+
+# removing multiplicative nature of associations of within-subject factors
+m3 <- mixed(
+  chao1 ~ birth_weight*age+sex+(birth_weight+age||sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The third model with random intercepts, random slopes, and additive effects 
+# (but no correlations between slopes and intercepts and no multiplicative effects) 
+# did not yield any warning messages.
+
+```
+
+```{r chao1 check}
+anova(m2)
+anova(m3)
+# Given that qualitatively the results of models m2 and m3 were matched, 
+# we decided to present the results of the m2 due to its stability.
+```
+
+```{r chao1 model}
+# we explore the results with M2
+
+# all the elements within object M2
+str(m2)
+# we  check for the homogeneity of variances 
+plot(m2$full_model)
+# this is for testing the normality of the residuals
+qqnorm(residuals(m2$full_model))
+# we now explore the random structure in more detail
+summary (m2$full_model)
+# we can see the intercepts of each individual with this line of code (baseline eyemovement)
+coef(m2$full_model)
+```
+
+```{r chao1 posthoc1}
+model_chao1 <- m2
+emm_options(lmer.df = "kenward-roger")
+emm_int1 <- emmeans(model_chao1, "birth_weight", by = c("age"), model = "multivariate")
+emm_int1
+pairs(emm_int1, adjust = "BH")
+```
+
+```{r chao1 posthoc1}
+
+emm_options(lmer.df = "kenward-roger")
+emm_int2 <- emmeans(model_chao1, "age", model = "multivariate")
+emm_int2
+pairs(emm_int2, adjust = "BH")
+```
+
+## Faith
+```{r faith}
+# full model
+m1 <- mixed(
+  faith_pd ~ birth_weight*age+sex+(birth_weight*age|sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The first model with random intercepts, random slopes, multiplicative effects, 
+# and correlations between slopes and intercepts led to an error.
+
+# removing correlations between slopes and intercepts
+m2 <- mixed(
+  faith_pd ~ birth_weight*age+sex+(birth_weight*age||sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The second model with random intercepts, random slopes, and  multiplicative effects 
+# (but no correlations between slopes and intercepts) 
+# led to a model that failed to converge with 3 negative eigenvalues: -1.2e-03 -2.1e-03 -4.3e-03
+
+# removing multiplicative nature of associations of within-subject factors
+m3 <- mixed(
+  faith_pd ~ birth_weight*age+sex+(birth_weight+age||sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The third model with random intercepts, random slopes, and additive effects 
+# (but no correlations between slopes and intercepts and no multiplicative effects) 
+# the 3rd model did not yield any warning messages.
+```
+
+```{r faith check}
+anova(m2)
+anova(m3)
+# Given that qualitatively the results of models m2 m3 were matched, 
+# we decided to present the results of the m2 due to its stability.
+```
+
+```{r faith model}
+# we explore the results with M2
+
+# all the elements within object M2
+str(m2)
+# we  check for the homogeneity of variances 
+plot(m2$full_model)
+# this is for testing the normality of the residuals
+qqnorm(residuals(m2$full_model))
+# we now explore the random structure in more detail
+summary (m2$full_model)
+# we can see the intercepts of each individual with this line of code (baseline eyemovement)
+coef(m2$full_model)
+```
+
+```{r faith posthoc1}
+model_faith <- m2
+emm_options(lmer.df = "kenward-roger")
+emm_int1 <- emmeans(model_faith, "birth_weight", by = c("age"), model = "multivariate")
+emm_int1
+pairs(emm_int1, adjust = "BH")
+```
+
+```{r faith posthoc2}
+
+emm_options(lmer.df = "kenward-roger")
+emm_int2 <- emmeans(model_faith, "age", model = "multivariate")
+emm_int2
+pairs(emm_int2, adjust = "BH")
+```
+
+
+# weaning stage
+
+## shannon wean
+```{r shannon_w}
+# full model
+m1 <- mixed(
+  shannon_entropy ~ birth_weight*age*treatment+sex+(birth_weight*age*treatment|sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The first model with random intercepts, random slopes, multiplicative effects, 
+# and correlations between slopes and intercepts led to an error.
+
+# removing correlations between slopes and intercepts
+m2 <- mixed(
+  shannon_entropy ~ birth_weight*age*treatment+sex+(birth_weight*age*treatment||sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The second model with random intercepts, random slopes, and  multiplicative effects 
+# (but no correlations between slopes and intercepts) 
+# led to a model that failed to converge with with 4 negative eigenvalues: -1.1e-02 -1.1e-02 -1.1e-02 -6.4e-02
+
+# removing multiplicative nature of associations of within-subject factors
+m3 <- mixed(
+  shannon_entropy ~ birth_weight*age*treatment+sex+(birth_weight+age+treatment||sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The third model with random intercepts, random slopes, and additive effects 
+# (but no correlations between slopes and intercepts and no multiplicative effects) 
+# led to a model that failed to converge 4 negative eigenvalues: -9.4e-04 -9.5e-04 -3.8e+00 -6.4e+00
+
+# removing multiplicative nature of associations of within-subject factors, but adding correlations between slopes and intercepts
+m4 <- mixed(
+  shannon_entropy ~ birth_weight*age*treatment+sex+(birth_weight+age+treatment|sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The fourth model with random intercepts, random slopes, additive effects,
+# correlations between slopes and intercepts (but no multiplicative effects)
+# led to an error.
+
+# removing pretty much everything but keeping random intercepts and within-subject factor slopes
+m5 <- mixed(
+  shannon_entropy ~ birth_weight*age*treatment+sex+(age||sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# the 5th model did not yield any warning messages.
+```
+
+```{r shannon check}
+anova(m2)
+anova(m3)
+anova(m5)
+
+# we decided to present the results of the m5 due to its stability.
+```
+
+```{r shannon model}
+# we explore the results with M5
+
+# all the elements within object M5
+str(m5)
+# we  check for the homogeneity of variances 
+plot(m5$full_model)
+# this is for testing the normality of the residuals
+qqnorm(residuals(m5$full_model))
+# we now explore the random structure in more detail
+summary (m5$full_model)
+# we can see the intercepts of each individual with this line of code (baseline eyemovement)
+coef(m5$full_model)
+```
+
+```{r shannon posthoc1}
+model_shannon_wean <- m5
+emm_options(lmer.df = "kenward-roger")
+emm_int1 <- emmeans(model_shannon_wean, "birth_weight", by = c("age", "treatment"), model = "multivariate")
+emm_int1
+pairs(emm_int1, adjust = "BH")
+```
+
+```{r shannon posthoc2}
+
+emm_options(lmer.df = "kenward-roger")
+emm_int2 <- emmeans(model_shannon_wean, "age", by = c("birth_weight", "treatment"), model = "multivariate")
+emm_int2
+pairs(emm_int2, adjust = "BH")
+```
+
+```{r shannon posthoc3}
+
+emm_options(lmer.df = "kenward-roger")
+emm_int3 <- emmeans(model_shannon_wean, "treatment", by = c("birth_weight", "age"), model = "multivariate")
+emm_int3
+pairs(emm_int3, adjust = "BH")
+```
+
+## chao1 wean
+```{r chao1_w}
+# full model
+m1 <- mixed(
+  chao1 ~ birth_weight*age*treatment+sex+(birth_weight*age*treatment|sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The first model with random intercepts, random slopes, multiplicative effects, 
+# and correlations between slopes and intercepts led to an error.
+
+# removing correlations between slopes and intercepts
+m2 <- mixed(
+  chao1 ~ birth_weight*age*treatment+sex+(birth_weight*age*treatment||sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The second model with random intercepts, random slopes, and  multiplicative effects 
+# (but no correlations between slopes and intercepts) 
+# led to a model that failed to converge with 15 negative eigenvalues: -3.3e-03 -3.3e-03 -3.4e-03 -7.0e-03 -7.1e-03 -7.8e-03 -1.6e-02 -1.8e-02 -1.8e-02 -1.8e-02 -5.0e-02 -5.0e-02 -5.9e-02 -6.8e-02 -5.2e+00
+
+# removing multiplicative nature of associations of within-subject factors
+m3 <- mixed(
+  chao1 ~ birth_weight*age*treatment+sex+(birth_weight+age+treatment||sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The third model with random intercepts, random slopes, and additive effects 
+# (but no correlations between slopes and intercepts and no multiplicative effects) 
+# led to a model that failed to converge with 2 negative eigenvalues: -2.8e-02 -2.8e-02
+
+# removing multiplicative nature of associations of within-subject factors, but adding correlations between slopes and intercepts
+m4 <- mixed(
+  chao1 ~ birth_weight*age*treatment+sex+(birth_weight+age+treatment|sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The fourth model with random intercepts, random slopes, additive effects,
+# correlations between slopes and intercepts (but no multiplicative effects)
+# led to an error.
+
+# removing pretty much everything but keeping random intercepts and within-subject factor slopes
+m5 <- mixed(
+  chao1 ~ birth_weight*age*treatment+sex+(age||sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# the 5th model did not yield any warning messages.
+```
+
+```{r chao1 check}
+anova(m2)
+anova(m3)
+anova(m5)
+
+# we decided to present the results of the m5 due to its stability.
+```
+
+```{r shannon model}
+# we explore the results with M5
+
+# all the elements within object M5
+str(m5)
+# we  check for the homogeneity of variances 
+plot(m5$full_model)
+# this is for testing the normality of the residuals
+qqnorm(residuals(m5$full_model))
+# we now explore the random structure in more detail
+summary (m5$full_model)
+# we can see the intercepts of each individual with this line of code (baseline eyemovement)
+coef(m5$full_model)
+```
+
+```{r chao1 posthoc1}
+# model_chao1_wean <- m5
+emm_options(lmer.df = "kenward-roger")
+emm_int1 <- emmeans(model_chao1_wean, "birth_weight", by = c("age", "treatment"), model = "multivariate")
+emm_int1
+pairs(emm_int1, adjust = "BH")
+```
+
+```{r chao1 posthoc2}
+
+emm_options(lmer.df = "kenward-roger")
+emm_int2 <- emmeans(model_chao1_wean, "treatment", by = c("age","birth_weight"), model = "multivariate")
+emm_int2
+pairs(emm_int2, adjust = "BH")
+```
+
+```{r chao1 posthoc3}
+
+emm_options(lmer.df = "kenward-roger")
+emm_int3 <- emmeans(model_chao1_wean, "age", by = c("treatment","birth_weight"), model = "multivariate")
+emm_int3
+pairs(emm_int3, adjust = "BH")
+```
+
+## faith wean
+```{r faith_w}
+# full model
+m1 <- mixed(
+  faith_pd ~ birth_weight*age*treatment+sex+(birth_weight*age*treatment|sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The first model with random intercepts, random slopes, multiplicative effects, 
+# and correlations between slopes and intercepts led to an error.
+
+# removing correlations between slopes and intercepts
+m2 <- mixed(
+  faith_pd ~ birth_weight*age*treatment+sex+(birth_weight*age*treatment||sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The second model with random intercepts, random slopes, and  multiplicative effects 
+# (but no correlations between slopes and intercepts) 
+# led to a model that failed to converge with 3 negative eigenvalues: -1.4e-03 -1.4e-03 -9.8e-03
+
+# removing multiplicative nature of associations of within-subject factors
+m3 <- mixed(
+  faith_pd ~ birth_weight*age*treatment+sex+(birth_weight+age+treatment||sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The third model with random intercepts, random slopes, and additive effects 
+# (but no correlations between slopes and intercepts and no multiplicative effects) 
+# led to a model that failed to converge with 2 negative eigenvalues: -7.8e-03 -7.8e-03
+
+# removing multiplicative nature of associations of within-subject factors, but adding correlations between slopes and intercepts
+m4 <- mixed(
+  faith_pd ~ birth_weight*age*treatment+sex+(birth_weight+age+treatment|sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The fourth model with random intercepts, random slopes, additive effects,
+# correlations between slopes and intercepts (but no multiplicative effects)
+# led to an error.
+
+# removing pretty much everything but keeping random intercepts and within-subject factor slopes
+m5 <- mixed(
+  faith_pd ~ birth_weight*age*treatment+sex+(age||sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# the 5th model did not yield any warning messages.
+```
+
+```{r shannon check}
+anova(m2)
+anova(m3)
+anova(m5)
+
+# we decided to present the results of the m5 due to its stability.
+```
+
+```{r faith model}
+# we explore the results with M5
+
+# all the elements within object M5
+str(m5)
+# we  check for the homogeneity of variances 
+plot(m5$full_model)
+# this is for testing the normality of the residuals
+qqnorm(residuals(m5$full_model))
+# we now explore the random structure in more detail
+summary (m5$full_model)
+# we can see the intercepts of each individual with this line of code (baseline eyemovement)
+coef(m5$full_model)
+```
+
+```{r faith posthoc1}
+model_faith_wean <- m5
+emm_options(lmer.df = "kenward-roger")
+emm_int1 <- emmeans(model_faith_wean, "birth_weight", by = c("age", "treatment"), model = "multivariate")
+emm_int1
+pairs(emm_int1, adjust = "BH")
+```
+
+```{r shannon posthoc2}
+
+emm_options(lmer.df = "kenward-roger")
+emm_int2 <- emmeans(model_faith_wean, "age", by = c("birth_weight", "treatment"), model = "multivariate")
+emm_int2
+pairs(emm_int2, adjust = "BH")
+```
+
+```{r shannon posthoc3}
+
+emm_options(lmer.df = "kenward-roger")
+emm_int3 <- emmeans(model_faith_wean, "treatment", by = c("birth_weight", "age"), model = "multivariate")
+emm_int3
+pairs(emm_int3, adjust = "BH")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Microbiota age
+```{r packages, include=FALSE}
+
+rm(list = ls())
+
+library(tidyverse)
+library(qiime2R)
+library(phyloseq)
+library(zoo)
+library(randomForest)
+library(xgboost)
+library(skimr)
+library(DataExplorer)
+library(caret)
+library(pROC)
+library(pheatmap)
+library(ggsci)
+library(ggpubr)
+```
+
+# statistics for microbiota age
+
+```{r, include=FALSE}
+library(tidyverse)
+library(qiime2R)
+library(ggpubr)
+library(ggsci)
+library(lme4)
+library(emmeans)
+library(afex)
+library(multcomp)
+library(ggbeeswarm)
+library(summarytools)
+library(interactions)
+library(jtools)
+```
+
+
+```{r}
+meta <- read.table("sample-metadata.tsv", sep = "\t", header = TRUE)
+df <- read.table("m_age.tsv", sep = '\t', header = TRUE)
+df$sample.id <- row.names(df)
+df <- inner_join(df, meta)
+df$observed <- as.numeric(df$observed)
+```
+
+
+```{r data split, include=FALSE}
+datas = df
+set_sum_contrasts() # important for afex
+# View(datas)
+# str(datas) # summary of the types of variables and their values
+
+datas$pig_id <- as.factor(datas$pig_id)
+datas$sow_id <- as.factor(datas$sow_id)
+datas$treatment <- as.factor(datas$treatment)
+datas$birth_weight <- as.factor(datas$birth_weight)
+datas$sex <- as.factor(datas$sex)
+datas$age <- as.factor(datas$age)
+datas$stage <- as.factor(datas$stage)
+datas$group <- as.factor(datas$group)
+datas$age_group <- as.factor(datas$age_group)
+
+str(datas)
+
+data_suck <- filter(datas, stage == "suckling")
+data_wean <- filter(datas, stage == "weaning")
+```
+
+# roughtly check day by day 
+
+```{r suck}
+ages <- unique(data_suck$age)
+idx <- "predict"
+for (i in ages){
+  data <- filter(data_suck, age == i)
+  print(paste0('day',i))
+  for (j in idx){
+    print(j)
+    model = wilcox.test(data[[j]] ~ birth_weight,data=data, exact=FALSE)
+    print(model$p.value)
+  }
+  print("")
+}
+
+```
+
+```{r wean}
+ages <- unique(data_wean$age)
+idx <- "predict"
+
+for (i in ages){
+  data <- filter(data_wean, age == i)
+  print(paste0('day',i))
+  for (j in idx){
+    print(j)
+    model = glm(data[[j]] ~ birth_weight*treatment, data=data)
+    print(summary(model))
+    #print(summary(model)$coefficients[,4])
+  }
+  print("")
+}
+```
+
+# suckling stage
+
+## microbiota age
+```{r microbiota age}
+# full model
+m1 <- mixed(
+  predict ~ birth_weight*age+sex+(birth_weight*age|sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The first model with random intercepts, random slopes, multiplicative effects, 
+# and correlations between slopes and intercepts led to an error.
+
+# removing correlations between slopes and intercepts
+m2 <- mixed(
+  predict ~ birth_weight*age+sex+(birth_weight*age||sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The second model with random intercepts, random slopes, and  multiplicative effects 
+# (but no correlations between slopes and intercepts) 
+# led to a model that failed to converge with 2 negative eigenvalues: -5.6e-04 -1.4e-02
+
+# removing multiplicative nature of associations of within-subject factors
+m3 <- mixed(
+  predict ~ birth_weight*age+sex+(birth_weight+age||sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The third model with random intercepts, random slopes, and additive effects 
+# (but no correlations between slopes and intercepts and no multiplicative effects) 
+# did not yield any warning messages.
+
+# removing multiplicative nature of associations of within-subject factors, but adding correlations between slopes and intercepts
+m4 <- mixed(
+  predict ~ birth_weight*age+sex+(birth_weight+age|sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The fourth model with random intercepts, random slopes, additive effects,
+# correlations between slopes and intercepts (but no multiplicative effects)
+# led to an error.
+
+# removing pretty much everything but keeping random intercepts and within-subject factor slopes
+m5 <- mixed(
+  predict ~ birth_weight*age+sex+(age||sow_id/pig_id),
+  data = data_suck,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# the 5th model did not yield any warning messages.
+```
+
+```{r microbiota age check}
+anova(m2)
+anova(m3)
+anova(m5)
+# Given that qualitatively the results of models m2 m3 m5 were matched, 
+# we decided to present the results of the m2 due to its stability.
+```
+
+```{r microbiota age model}
+# we explore the results with M2
+
+# all the elements within object M2
+str(m2)
+# we  check for the homogeneity of variances 
+plot(m2$full_model)
+# this is for testing the normality of the residuals
+qqnorm(residuals(m2$full_model))
+# we now explore the random structure in more detail
+summary (m2$full_model)
+# we can see the intercepts of each individual with this line of code (baseline eyemovement)
+coef(m2$full_model)
+```
+
+```{r microbiota age posthoc1}
+
+model_suckling <- m2
+emm_options(lmer.df = "kenward-roger")
+emm_int1 <- emmeans(model_model_suckling, "birth_weight", by = c("age"), model = "multivariate")
+emm_int1
+pairs(emm_int1, adjust = "BH")
+```
+
+# weaning stage
+## M age wean
+```{r M age_w}
+# full model
+m1 <- mixed(
+  predict ~ birth_weight*age*treatment+sex+(birth_weight*age*treatment|sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The first model with random intercepts, random slopes, multiplicative effects, 
+# and correlations between slopes and intercepts led to an error.
+
+# removing correlations between slopes and intercepts
+m2 <- mixed(
+  predict ~ birth_weight*age*treatment+sex+(birth_weight*age*treatment||sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The second model with random intercepts, random slopes, and  multiplicative effects 
+# (but no correlations between slopes and intercepts) 
+# led to a model that failed to converge with 5 negative eigenvalues: -7.6e-03 -7.7e-03 -7.7e-03 -1.3e-01 -2.3e-01
+
+# removing multiplicative nature of associations of within-subject factors
+m3 <- mixed(
+  predict ~ birth_weight*age*treatment+sex+(birth_weight+age+treatment||sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The third model with random intercepts, random slopes, and additive effects 
+# (but no correlations between slopes and intercepts and no multiplicative effects) 
+# did not yield any warning messages
+
+# removing multiplicative nature of associations of within-subject factors, but adding correlations between slopes and intercepts
+m4 <- mixed(
+  predict ~ birth_weight*age*treatment+sex+(birth_weight+age+treatment|sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# The fourth model with random intercepts, random slopes, additive effects,
+# correlations between slopes and intercepts (but no multiplicative effects)
+# led to an error.
+
+# removing pretty much everything but keeping random intercepts and within-subject factor slopes
+m5 <- mixed(
+  predict ~ birth_weight*age*treatment+sex+(age||sow_id/pig_id),
+  data = data_wean,
+  method = "KR",
+  control = lmerControl(optCtrl = list(maxfun = 1e6)),
+  expand_re = TRUE
+)
+# the 5th model did not yield any warning messages.
+```
+
+```{r M age_w check}
+anova(m2)
+anova(m3)
+anova(m5)
+
+# we decided to present the results of the m3 due to its stability.
+```
+
+```{r M age_w model}
+# we explore the results with M5
+
+# all the elements within object M5
+str(m3)
+# we  check for the homogeneity of variances 
+plot(m3$full_model)
+# this is for testing the normality of the residuals
+qqnorm(residuals(m3$full_model))
+# we now explore the random structure in more detail
+summary (m3$full_model)
+# we can see the intercepts of each individual with this line of code (baseline eyemovement)
+coef(m3$full_model)
+```
+
+```{r M age_w posthoc1}
+
+emm_options(lmer.df = "kenward-roger")
+emm_int1 <- emmeans(m3, "birth_weight", by = c("age", "treatment"), model = "multivariate")
+emm_int1
+pairs(emm_int1, adjust = "BH")
+```
+
+```{r M age_w posthoc2}
+
+emm_options(lmer.df = "kenward-roger")
+emm_int2 <- emmeans(m3, "age", by = c("birth_weight", "treatment"), model = "multivariate")
+emm_int2
+pairs(emm_int2, adjust = "BH")
+```
+
+```{r M age_w posthoc3}
+
+emm_options(lmer.df = "kenward-roger")
+emm_int3 <- emmeans(m3, "treatment", by = c("birth_weight", "age"), model = "multivariate")
+emm_int3
+pairs(emm_int3, adjust = "BH")
+```
+
+
+
+
+
+

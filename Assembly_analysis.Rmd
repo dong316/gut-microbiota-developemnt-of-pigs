@@ -1,0 +1,695 @@
+---
+title: "Assembly_analysis"
+author: "Wenxuan Dong"
+date: "2023-04-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+package_list <- c("tidyverse", "qiime2R","ggpubr","ggsci","lme4","afex",
+                  "emmeans", "picante", "NST", "iCAMP", "ape", "knitr",
+                  "kableExtra", "scales", "ggsci", "minpack.lm", "Hmisc",
+                  "stats4")
+for(p in package_list){
+  if(!suppressWarnings(suppressMessages(require(p, character.only = TRUE, quietly = TRUE, warn.conflicts = FALSE)))){
+    install.packages(p, repos=site)
+    suppressWarnings(suppressMessages(library(p, character.only = TRUE, quietly = TRUE, warn.conflicts = FALSE)))
+  }
+}
+```
+
+```{r read tables}
+meta <- read.table("sample-metadata.tsv", sep = "\t", header = TRUE, row.names = 1)
+
+table <- read_qza("qiime_out/rarefied_table.qza") 
+otu <- as.data.frame(table$data)
+
+meta <- filter(meta, row.names(meta) %in% colnames(otu))
+# meta <- select(meta, age_group)
+
+otu <- otu%>% 
+  mutate(otuid=row.names(otu)) %>% 
+  mutate(otuid2=str_replace(otuid, "^", "'"))%>%
+  mutate(otuid3=str_replace(otuid2, "$", "'"))
+row.names(otu) <- otu$otuid3 # keep identical otu name with the tree
+otu <- otu[, -(907:909)] 
+otu <- t(otu)
+
+tree <- read.tree('tree.nwk') # unrooted tree from core-metrics-results
+tree <- prune.sample(otu, tree)     # remove otus filtered out after rarefaction
+dis <- cophenetic(tree)
+```
+
+# NST (normalized stochasticity ratio)
+```{r nst, cache=TRUE}
+# 3 minutes for 80 samples using 8 cores
+# 30 minutes for 906 samples using 50 cores
+# set.seed(123)
+# tnst <- tNST(
+#   comm = otu,
+#   group = meta,
+#   dist.method = 'bray', # default is jaccard
+#   null.model = 'PF',    # default is PF
+#   rand = 1000,          # default is 1000
+#   output.rand = TRUE,   # default is FALSE
+#   nworker = 8           
+#   )
+load('iCAMP/tnst.rda')
+# 0.6 minutes for 80 samples using 8 cores
+# 40 minutes for 906 samples using 16 cores
+# set.seed(123)
+# nstb <- nst.boot(
+#   nst.result = tnst,
+#   group = NULL,         # default is NULL
+#   rand = 999,           # default is 999
+#   out.detail = TRUE,    # default is FALSE
+#   nworker = 8
+#   )
+load('iCAMP/nstb.rda')
+# save(tnst, nstb, file='output/nst.rda')
+# load("output/nst.rda")
+# load('iCAMP/nst.j.rda')
+```
+
+
+```{r result}
+cnst <- filter(nstb$compare, Index == 'NST') # p values = p.count.noOut
+snst <- filter(nstb$summary, Index == 'NST')
+
+cnst %>% knitr::kable(caption = "Statistical comparison") %>%
+  kable_styling()
+
+snst %>% knitr::kable(caption = "Rawdata summary") %>%
+  kable_styling()
+```
+
+```{r mutate}
+nst <- NULL
+for (i in names(nstb[["detail"]][["NST.boot"]])){
+  #print(i)
+  values <- data.frame(nstb[["detail"]][["NST.boot"]][[i]])
+  values <- rename(values, NST=colnames(values)) %>% 
+    mutate(group = i) %>% 
+    mutate(age = str_remove_all(group, "[[:alpha:]]")) %>% 
+    mutate(treatment = if_else(stringr::str_ends(group, "AB"), "AB", "CON")) %>% 
+    mutate(birth_weight = str_remove(group,"^\\d+")) %>% 
+    mutate(birth_weight = str_remove(birth_weight, "AB$")) %>% 
+    mutate(birth_weight = str_remove(birth_weight, "CON$")) %>% 
+    mutate(group = str_remove(group,"^\\d+"))
+
+  # assign((paste0("age",i, "nstb")), values)
+  nst <- rbind(nst, values)
+}
+nst$age <- as.numeric(nst$age)
+nst <- mutate(nst, stage = if_else(age < 18, "Suckling", "Weaning"))
+```
+
+```{r plots}
+ggplot(filter(nst,age < 18), aes(age, NST, color=birth_weight))+
+  geom_smooth(method = "lm")+
+  geom_point()
+
+ggplot(filter(nst,age > 18), aes(age, NST, color=group))+
+  geom_smooth(method = "lm")+
+  geom_point()
+
+```
+
+```{r plot}
+ggplot(nst, aes(age, NST, color=group))+
+  geom_smooth(method = "lm")+
+  #geom_vline(xintercept = 18)+
+  facet_wrap(~stage, nrow =1, 
+             scales = "free_x")
+```
+
+```{r raw data}
+nst.sum <- snst %>% 
+  select(-starts_with("Out")) %>% 
+  mutate(group = Group) %>% 
+  mutate(age = str_remove_all(group, "[[:alpha:]]")) %>% 
+  mutate(treatment = if_else(stringr::str_ends(group, "AB"), "AB", "CON")) %>% 
+  mutate(birth_weight = str_remove(group,"^\\d+")) %>% 
+  mutate(birth_weight = str_remove(birth_weight, "AB$")) %>% 
+  mutate(birth_weight = str_remove(birth_weight, "CON$")) %>% 
+  mutate(group = str_remove(group,"^\\d+"))
+nst.sum$age <- as.numeric(nst.sum$age)
+```
+
+```{r plot raw}
+ggplot(filter(nst.sum, age < 18), aes(age, mean, group = interaction(birth_weight, treatment), color = birth_weight)) +
+  geom_errorbar(aes(ymin = mean - stdev, ymax = mean + stdev),
+                width = 0.5, lwd = 0.5, position = position_dodge(0.5), alpha = .5) +
+  geom_line(aes(linetype = treatment), lwd = 1, position = position_dodge(0.5)) +
+  geom_point(aes(shape = treatment), size = 2.5, position = position_dodge(0.5)) +
+  scale_linetype_manual(values = c("solid", "dashed"))+
+  scale_color_manual(values = c("#0072B2", "#E69F00"))+
+  theme_bw()
+
+
+ggplot(filter(nst.sum, age > 18), aes(age, mean, group = interaction(birth_weight, treatment), color = birth_weight)) +
+  geom_errorbar(aes(ymin = mean - stdev, ymax = mean + stdev),
+                width = 0.5, lwd = 0.5, position = position_dodge(0.5), alpha = .5) +
+  geom_line(aes(linetype = treatment), lwd = 1, position = position_dodge(0.5)) +
+  geom_point(aes(shape = treatment), size = 2.5, position = position_dodge(0.5)) +
+  scale_linetype_manual(values = c("solid", "dashed"))+
+  scale_color_manual(values = c("#0072B2", "#E69F00"))+
+  theme_bw()
+```
+
+# QPEN (Quantifying assembly processes based on entire-community null model analysis)
+```{r qpen}
+# 27 minutes for 80 samples using 8 cores
+# set.seed(123)
+# qpen.result <- qpen(
+#     comm = otu,
+#     pd = dis,
+#     sig.bNTI = 2,
+#     sig.rc = 0.95,
+#     rand.time = 1000,
+#     nworker = 8)
+
+# 1 minutes for 80 samples using 8 cores
+# set.seed(123)
+# qpen.boot <- qpen.test(
+#   qpen.result = qpen.result,
+#   treat = meta,
+#   rand.time = 1000,
+#   between.group = FALSE,
+#   out.detail = TRUE,
+#   silent = FALSE
+# )
+# save(qpen.boot, qpen.result, file='iCAMP/qpen1.rda')
+load("iCAMP/qpen1.rda")
+qpen.boot <- qpen.boot1
+qpen.result <- qpen.result1
+
+qpenos <- qpen.boot$obs.summary
+qpenbs <- qpen.boot$boot.summary
+qpenc <- qpen.boot$compare # P values and Effect sizes
+qpend <- qpen.boot$boot.detail
+
+# write.table(qpenc, "output/qpenc.txt", quote=F, sep='\t', col.names=T, row.names=F)
+```
+
+```{r mutate data}
+bNTI <- qpenbs %>% 
+  filter(Index == 'bNTI')  %>% 
+  dplyr::select(-starts_with("Out")) %>% 
+  mutate(group = GroupName) %>% 
+  mutate(age = str_remove_all(group, "[[:alpha:]]")) %>% 
+  mutate(treatment = if_else(stringr::str_ends(group, "AB"), "AB", "CON")) %>% 
+  mutate(birth_weight = str_remove(group,"^\\d+")) %>% 
+  mutate(birth_weight = str_remove(birth_weight, "AB$")) %>% 
+  mutate(birth_weight = str_remove(birth_weight, "CON$")) %>% 
+  mutate(group = str_remove(group,"^\\d+"))
+bNTI$age <- as.numeric(bNTI$age)
+```
+
+```{r bNTI}
+ggplot(bNTI, aes(as.numeric(age), mean, color = group))+
+  #geom_point()+
+  geom_smooth(se = FALSE,method = "glm")
+  
+ggplot(bNTI, aes(as.numeric(age), mean, color = group))+
+  geom_point()
+
+ggplot(filter(bNTI,age < 18), aes(age, mean, color=birth_weight))+
+  geom_smooth(method = "lm")
+
+ggplot(filter(bNTI,age > 18), aes(age, mean, color =group))+
+  geom_smooth(method = "lm")
+```
+
+```{r}
+
+ggplot(filter(bNTI, age < 18), aes(age, mean,group = interaction(birth_weight, treatment), color = birth_weight)) +
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd),
+                width = 0.5, lwd = 0.5, position = position_dodge(0.5), alpha = .5) +
+  geom_line(aes(linetype = treatment), lwd = 1, position = position_dodge(0.5)) +
+  geom_point(aes(shape = treatment), size = 2.5, position = position_dodge(0.5)) +
+  scale_linetype_manual(values = c("solid", "dashed"))+
+  scale_color_manual(values = c("#0072B2", "#E69F00"))+
+  geom_hline(yintercept = -2, linetype = "dashed")+
+  theme_bw()
+
+ggplot(filter(bNTI, age > 18), aes(age, mean, group = interaction(birth_weight, treatment), color = birth_weight)) +
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd),
+                width = 0.5, lwd = 0.5, position = position_dodge(0.5), alpha = .5) +
+  geom_line(aes(linetype = treatment), lwd = 1, position = position_dodge(0.5)) +
+  geom_point(aes(shape = treatment), size = 2.5, position = position_dodge(0.5)) +
+  scale_linetype_manual(values = c("solid", "dashed"))+
+  scale_color_manual(values = c("#0072B2", "#E69F00"))+
+  geom_hline(yintercept = -2, linetype = "dashed")+
+  geom_vline(xintercept = c(26,34), lwd = 0.5, linetype = "dashed", color = "black") +
+  theme_bw()
+```
+
+
+```{r mutate raw}
+bNTI.raw <- qpend %>% 
+  filter(Index == 'bNTI')  %>% 
+  mutate(group = GroupName) %>% 
+  mutate(age = str_remove_all(group, "[[:alpha:]]")) %>% 
+  mutate(treatment = if_else(stringr::str_ends(group, "AB"), "AB", "CON")) %>% 
+  mutate(birth_weight = str_remove(group,"^\\d+")) %>% 
+  mutate(birth_weight = str_remove(birth_weight, "AB$")) %>% 
+  mutate(birth_weight = str_remove(birth_weight, "CON$")) %>% 
+  mutate(group = str_remove(group,"^\\d+")) %>% 
+  pivot_longer(boot1:boot50, names_to = 'bNTI')
+bNTI.raw$age <- as.numeric(bNTI.raw$age)
+```
+
+
+```{r}
+ggplot(bNTI.raw, aes(as.numeric(age), value, color = birth_weight, shape = treatment))+
+  geom_point(position = position_dodge(2))+
+  geom_smooth(method = 'glm')
+  
+```
+
+
+# iCAMP (infer Community Assembly Mechanisms by Phylogenetic-bin-based null model analysis)
+```{r icamp, cache=TRUE}
+# 1.45 hours for 80 samples using 8 cores
+# 17.6 hours for 906 samples using 16 cores
+# set.seed(123)
+# icamp.result <- icamp.big(
+#   comm = otu,
+#   tree = tree,
+#   pd.wd = getwd(),
+#   ses.cut = 1.96,
+#   rc.cut = 0.95,
+#   bin.size.limit = 24,
+#   rand = 1000,
+#   nworker = 8
+# )
+# 1 minutes for 80 samples using 8 cores
+# 35 minutes for 906 samples using 16 cores
+# set.seed(123)
+# icamp.boot <- icamp.boot(
+#   icamp.result = icamp.result$CbMPDiCBraya,
+#   treat = meta,
+#   rand.time = 1000,
+#   compare = TRUE,
+#   silent = FALSE,
+#   between.group = FALSE,
+#   ST.estimation = FALSE
+# )
+# save(icamp.boot, icamp.result, file='output/icamp.rda')
+load("iCAMP/icamp.rda")
+
+# which(duplicated(names(icamps)))
+icamps <- icamp.boot$summary
+icamps <- icamps[,-13]
+icampc <- icamp.boot$compare
+# write.table(icampc, "iCAMP/icampc.txt", quote=F, sep='\t', col.names=T, row.names=F)
+
+# write.table(icamps, "iCAMP/icamps.txt", quote=F, sep='\t', col.names=T, row.names=F)
+
+library(dplyr)
+library(stringr)
+icampc.summary <- icampc %>%
+  mutate(G1trt = str_replace_all(Group1, "\\d+", ""))%>%
+  mutate(G2trt = str_replace_all(Group2, "\\d+", ""))%>%
+  mutate(G1age = str_replace_all(Group1, "[A-Za-z]+", ""))%>%
+  mutate(G2age = str_replace_all(Group2, "[A-Za-z]+", ""))
+# write.table(icampc.summary, "iCAMP/icampc.summary.txt", quote=F, sep='\t', col.names=T, row.names=F)
+```
+
+```{r}
+icamp.sum <- icamps %>% 
+  select(-starts_with("Out")) %>% 
+  mutate(group = Group) %>% 
+  mutate(age = str_remove_all(group, "[[:alpha:]]")) %>% 
+  mutate(treatment = if_else(stringr::str_ends(group, "AB"), "AB", "CON")) %>% 
+  mutate(birth_weight = str_remove(group,"^\\d+")) %>% 
+  mutate(birth_weight = str_remove(birth_weight, "AB$")) %>% 
+  mutate(birth_weight = str_remove(birth_weight, "CON$")) %>% 
+  mutate(group = str_remove(group,"^\\d+")) %>% 
+  mutate_at(vars(Mean, Stdev, age), as.numeric)
+```
+
+```{r}
+ggplot(icamp.sum, aes(as.factor(age), Mean, shape = group, color = Process)) +
+  geom_errorbar(aes(ymin = Mean - Stdev, ymax = Mean + Stdev),
+                width = 1, lwd = .5, position = position_dodge(.5), alpha = .8) +
+  geom_point(size = 3, stroke = 1, position = position_dodge(.5)) +
+  scale_shape_manual(values = c(2, 1, 17, 16)) +
+  theme_bw()
+
+# ggsave("output/assembly_process4.pdf", width = 12, height = 7)
+```
+
+# Neutral Community Model
+
+```{r sncm.fit}
+sncm.fit <- function(spp, pool=NULL, stats=TRUE, taxon=NULL){
+  require(minpack.lm)
+  require(Hmisc)
+  require(stats4)
+  
+  options(warn=-1)
+  
+  #Calculate the number of individuals per community
+  N <- mean(apply(spp, 1, sum))
+  
+  #Calculate the average relative abundance of each taxa across communities
+  if(is.null(pool)){
+    p.m <- apply(spp, 2, mean)
+    p.m <- p.m[p.m != 0]
+    p <- p.m/N
+  } else {
+    p.m <- apply(pool, 2, mean)
+    p.m <- p.m[p.m != 0]
+    p <- p.m/N
+  }
+  
+  #Calculate the occurrence frequency of each taxa across communities
+  spp.bi <- 1*(spp>0)
+  freq <- apply(spp.bi, 2, mean)
+  freq <- freq[freq != 0]
+  
+  #Combine
+  C <- merge(p, freq, by=0)
+  C <- C[order(C[,2]),]
+  C <- as.data.frame(C)
+  C.0 <- C[!(apply(C, 1, function(y) any(y == 0))),] #Removes rows with any zero (absent in either source pool or local communities)
+  p <- C.0[,2]
+  freq <- C.0[,3]
+  names(p) <- C.0[,1]
+  names(freq) <- C.0[,1]
+  
+  #Calculate the limit of detection
+  d = 1/N
+  
+  ##Fit model parameter m (or Nm) using Non-linear least squares (NLS)
+  m.fit <- nlsLM(freq ~ pbeta(d, N*m*p, N*m*(1-p), lower.tail=FALSE), start=list(m=0.1))
+  m.ci <- confint(m.fit, 'm', level=0.95)
+  
+  # ##Fit neutral model parameter m (or Nm) using Maximum likelihood estimation (MLE)
+  # sncm.LL <- function(m, sigma){
+  #   R = freq - pbeta(d, N*m*p, N*m*(1-p), lower.tail=FALSE)
+  #   R = dnorm(R, 0, sigma)
+  #   -sum(log(R))
+  # }
+  # m.mle <- mle(sncm.LL, start=list(m=0.1, sigma=0.1), nobs=length(p))
+  # 
+  # ##Calculate Akaike's Information Criterion (AIC)
+  # aic.fit <- AIC(m.mle, k=2)
+  # bic.fit <- BIC(m.mle)
+  aic.fit <- NA
+  bic.fit <- NA
+  
+  ##Calculate goodness-of-fit (R-squared and Root Mean Squared Error)
+  freq.pred <- pbeta(d, N*coef(m.fit)*p, N*coef(m.fit)*(1-p), lower.tail=FALSE)
+  Rsqr <- 1 - (sum((freq - freq.pred)^2))/(sum((freq - mean(freq))^2))
+  RMSE <- sqrt(sum((freq-freq.pred)^2)/(length(freq)-1))
+  
+  pred.ci <- binconf(freq.pred*nrow(spp), nrow(spp), alpha=0.05, method="wilson", return.df=TRUE)
+  
+  ##Calculate AIC for binomial model
+  bino.LL <- function(mu, sigma){
+    R = freq - pbinom(d, N, p, lower.tail=FALSE)
+    R = dnorm(R, mu, sigma)
+    -sum(log(R))
+  }
+  bino.mle <- mle(bino.LL, start=list(mu=0, sigma=0.1), nobs=length(p))
+  
+  aic.bino <- AIC(bino.mle, k=2)
+  bic.bino <- BIC(bino.mle)
+  
+  ##Goodness of fit for binomial model
+  bino.pred <- pbinom(d, N, p, lower.tail=FALSE)
+  Rsqr.bino <- 1 - (sum((freq - bino.pred)^2))/(sum((freq - mean(freq))^2))
+  RMSE.bino <- sqrt(sum((freq - bino.pred)^2)/(length(freq) - 1))
+  
+  bino.pred.ci <- binconf(bino.pred*nrow(spp), nrow(spp), alpha=0.05, method="wilson", return.df=TRUE)
+  
+  ##Calculate AIC for Poisson model
+  pois.LL <- function(mu, sigma){
+    R = freq - ppois(d, N*p, lower.tail=FALSE)
+    R = dnorm(R, mu, sigma)
+    -sum(log(R))
+  }
+  pois.mle <- mle(pois.LL, start=list(mu=0, sigma=0.1), nobs=length(p))
+  
+  aic.pois <- AIC(pois.mle, k=2)
+  bic.pois <- BIC(pois.mle)
+  
+  ##Goodness of fit for Poisson model
+  pois.pred <- ppois(d, N*p, lower.tail=FALSE)
+  Rsqr.pois <- 1 - (sum((freq - pois.pred)^2))/(sum((freq - mean(freq))^2))
+  RMSE.pois <- sqrt(sum((freq - pois.pred)^2)/(length(freq) - 1))
+  
+  pois.pred.ci <- binconf(pois.pred*nrow(spp), nrow(spp), alpha=0.05, method="wilson", return.df=TRUE)
+  
+  ##Results
+  if(stats==TRUE){
+    fitstats <- data.frame(m=numeric(), m.ci=numeric(), binoLL=numeric(), poisLL=numeric(), Rsqr=numeric(), Rsqr.bino=numeric(), Rsqr.pois=numeric(), RMSE=numeric(), RMSE.bino=numeric(), RMSE.pois=numeric(), AIC=numeric(), BIC=numeric(), AIC.bino=numeric(), BIC.bino=numeric(), AIC.pois=numeric(), BIC.pois=numeric(), N=numeric(), Samples=numeric(), Richness=numeric(), Detect=numeric())
+    fitstats[1,] <- c(coef(m.fit), coef(m.fit)-m.ci[1], bino.mle@details$value, pois.mle@details$value, Rsqr, Rsqr.bino, Rsqr.pois, RMSE, RMSE.bino, RMSE.pois, aic.fit, bic.fit, aic.bino, bic.bino, aic.pois, bic.pois, N, nrow(spp), length(p), d)
+    return(fitstats)
+  } else {
+    A <- cbind(p, freq, freq.pred, pred.ci[,2:3], bino.pred, bino.pred.ci[,2:3])
+    A <- as.data.frame(A)
+    colnames(A) <- c('p', 'freq', 'freq.pred', 'pred.lwr', 'pred.upr', 'bino.pred', 'bino.lwr', 'bino.upr')
+    if(is.null(taxon)){
+      B <- A[order(A[,1]),]
+    } else {
+      B <- merge(A, taxon, by=0, all=TRUE)
+      row.names(B) <- B[,1]
+      B <- B[,-1]
+      B <- B[order(B[,1]),]
+    }
+    return(B)
+  }
+}
+```
+
+
+```{r}
+meta <- read.table("sample-metadata.tsv", sep = '\t', header = T, row.names = 1)
+table <- read_qza("qiime_out/rarefied_table.qza") 
+
+spp <- as.data.frame(table$data) 
+```
+
+```{r}
+LBW1 <- select(spp, starts_with("L") & ends_with(c("F1","M1")))
+LBW3 <- select(spp, starts_with("L") & ends_with(c("F3","M3")))
+LBW5 <- select(spp, starts_with("L") & ends_with(c("F5","M5")))
+LBW7 <- select(spp, starts_with("L") & ends_with(c("F7","M7")))
+LBW9 <- select(spp, starts_with("L") & ends_with(c("F9","M9")))
+
+LBW11 <- select(spp, starts_with("L") & ends_with(c("F11","M11")))
+LBW13 <- select(spp, starts_with("L") & ends_with(c("F13","M13")))
+LBW15 <- select(spp, starts_with("L") & ends_with(c("F15","M15")))
+LBW17 <- select(spp, starts_with("L") & ends_with(c("F17","M17")))
+
+NBW1 <- select(spp, starts_with("N") & ends_with(c("F1","M1")))
+NBW3 <- select(spp, starts_with("N") & ends_with(c("F3","M3")))
+NBW5 <- select(spp, starts_with("N") & ends_with(c("F5","M5")))
+NBW7 <- select(spp, starts_with("N") & ends_with(c("F7","M7")))
+NBW9 <- select(spp, starts_with("N") & ends_with(c("F9","M9")))
+
+NBW11 <- select(spp, starts_with("N") & ends_with(c("F11","M11")))
+NBW13 <- select(spp, starts_with("N") & ends_with(c("F13","M13")))
+NBW15 <- select(spp, starts_with("N") & ends_with(c("F15","M15")))
+NBW17 <- select(spp, starts_with("N") & ends_with(c("F17","M17")))
+
+# for (i in c(1,3,5,7,9,11,13,15,17)){
+#   print(i)
+# }
+
+LBW1.result <- sncm.fit(spp = t(LBW1), pool=t(spp), stats=FALSE, taxon=NULL)
+
+
+LBW1.stats <- sncm.fit(spp = t(LBW1), pool=t(spp), stats=TRUE, taxon=NULL)
+LBW3.stats <- sncm.fit(spp = t(LBW3), pool=t(spp), stats=TRUE, taxon=NULL)
+LBW5.stats <- sncm.fit(spp = t(LBW5), pool=t(spp), stats=TRUE, taxon=NULL)
+LBW7.stats <- sncm.fit(spp = t(LBW7), pool=t(spp), stats=TRUE, taxon=NULL)
+LBW9.stats <- sncm.fit(spp = t(LBW9), pool=t(spp), stats=TRUE, taxon=NULL)
+LBW11.stats <- sncm.fit(spp = t(LBW11), pool=t(spp), stats=TRUE, taxon=NULL)
+LBW13.stats <- sncm.fit(spp = t(LBW13), pool=t(spp), stats=TRUE, taxon=NULL)
+LBW15.stats <- sncm.fit(spp = t(LBW15), pool=t(spp), stats=TRUE, taxon=NULL)
+LBW17.stats <- sncm.fit(spp = t(LBW17), pool=t(spp), stats=TRUE, taxon=NULL)
+
+NBW1.stats <- sncm.fit(spp = t(NBW1), pool=t(spp), stats=TRUE, taxon=NULL)
+NBW3.stats <- sncm.fit(spp = t(NBW3), pool=t(spp), stats=TRUE, taxon=NULL)
+NBW5.stats <- sncm.fit(spp = t(NBW5), pool=t(spp), stats=TRUE, taxon=NULL)
+NBW7.stats <- sncm.fit(spp = t(NBW7), pool=t(spp), stats=TRUE, taxon=NULL)
+NBW9.stats <- sncm.fit(spp = t(NBW9), pool=t(spp), stats=TRUE, taxon=NULL)
+NBW11.stats <- sncm.fit(spp = t(NBW11), pool=t(spp), stats=TRUE, taxon=NULL)
+NBW13.stats <- sncm.fit(spp = t(NBW13), pool=t(spp), stats=TRUE, taxon=NULL)
+NBW15.stats <- sncm.fit(spp = t(NBW15), pool=t(spp), stats=TRUE, taxon=NULL)
+NBW17.stats <- sncm.fit(spp = t(NBW17), pool=t(spp), stats=TRUE, taxon=NULL)
+
+
+```
+
+```{r}
+LC19 <- select(spp, starts_with("LC") & ends_with("19"))
+LC21 <- select(spp, starts_with("LC") & ends_with("21"))
+LC23 <- select(spp, starts_with("LC") & ends_with("23"))
+LC25 <- select(spp, starts_with("LC") & ends_with("25"))
+LC27 <- select(spp, starts_with("LC") & ends_with("27"))
+LC29 <- select(spp, starts_with("LC") & ends_with("29"))
+LC31 <- select(spp, starts_with("LC") & ends_with("31"))
+LC33 <- select(spp, starts_with("LC") & ends_with("33"))
+LC35 <- select(spp, starts_with("LC") & ends_with("35"))
+LC37 <- select(spp, starts_with("LC") & ends_with("37"))
+LC39 <- select(spp, starts_with("LC") & ends_with("39"))
+LC41 <- select(spp, starts_with("LC") & ends_with("41"))
+
+aLC19.stats <- sncm.fit(spp = t(LC19), pool=t(spp), stats=TRUE, taxon=NULL)
+aLC21.stats <- sncm.fit(spp = t(LC21), pool=t(spp), stats=TRUE, taxon=NULL)
+aLC23.stats <- sncm.fit(spp = t(LC23), pool=t(spp), stats=TRUE, taxon=NULL)
+aLC25.stats <- sncm.fit(spp = t(LC25), pool=t(spp), stats=TRUE, taxon=NULL)
+aLC27.stats <- sncm.fit(spp = t(LC27), pool=t(spp), stats=TRUE, taxon=NULL)
+aLC29.stats <- sncm.fit(spp = t(LC29), pool=t(spp), stats=TRUE, taxon=NULL)
+aLC31.stats <- sncm.fit(spp = t(LC31), pool=t(spp), stats=TRUE, taxon=NULL)
+aLC33.stats <- sncm.fit(spp = t(LC33), pool=t(spp), stats=TRUE, taxon=NULL)
+aLC35.stats <- sncm.fit(spp = t(LC35), pool=t(spp), stats=TRUE, taxon=NULL)
+aLC37.stats <- sncm.fit(spp = t(LC37), pool=t(spp), stats=TRUE, taxon=NULL)
+aLC39.stats <- sncm.fit(spp = t(LC39), pool=t(spp), stats=TRUE, taxon=NULL)
+aLC41.stats <- sncm.fit(spp = t(LC41), pool=t(spp), stats=TRUE, taxon=NULL)
+```
+
+```{r}
+LA19 <- select(spp, starts_with("LA") & ends_with("19"))
+LA21 <- select(spp, starts_with("LA") & ends_with("21"))
+LA23 <- select(spp, starts_with("LA") & ends_with("23"))
+LA25 <- select(spp, starts_with("LA") & ends_with("25"))
+LA27 <- select(spp, starts_with("LA") & ends_with("27"))
+LA29 <- select(spp, starts_with("LA") & ends_with("29"))
+LA31 <- select(spp, starts_with("LA") & ends_with("31"))
+LA33 <- select(spp, starts_with("LA") & ends_with("33"))
+LA35 <- select(spp, starts_with("LA") & ends_with("35"))
+LA37 <- select(spp, starts_with("LA") & ends_with("37"))
+LA39 <- select(spp, starts_with("LA") & ends_with("39"))
+LA41 <- select(spp, starts_with("LA") & ends_with("41"))
+
+aLA19.stats <- sncm.fit(spp = t(LA19), pool=t(spp), stats=TRUE, taxon=NULL)
+aLA21.stats <- sncm.fit(spp = t(LA21), pool=t(spp), stats=TRUE, taxon=NULL)
+aLA23.stats <- sncm.fit(spp = t(LA23), pool=t(spp), stats=TRUE, taxon=NULL)
+aLA25.stats <- sncm.fit(spp = t(LA25), pool=t(spp), stats=TRUE, taxon=NULL)
+aLA27.stats <- sncm.fit(spp = t(LA27), pool=t(spp), stats=TRUE, taxon=NULL)
+aLA29.stats <- sncm.fit(spp = t(LA29), pool=t(spp), stats=TRUE, taxon=NULL)
+aLA31.stats <- sncm.fit(spp = t(LA31), pool=t(spp), stats=TRUE, taxon=NULL)
+aLA33.stats <- sncm.fit(spp = t(LA33), pool=t(spp), stats=TRUE, taxon=NULL)
+aLA35.stats <- sncm.fit(spp = t(LA35), pool=t(spp), stats=TRUE, taxon=NULL)
+aLA37.stats <- sncm.fit(spp = t(LA37), pool=t(spp), stats=TRUE, taxon=NULL)
+aLA39.stats <- sncm.fit(spp = t(LA39), pool=t(spp), stats=TRUE, taxon=NULL)
+aLA41.stats <- sncm.fit(spp = t(LA41), pool=t(spp), stats=TRUE, taxon=NULL)
+```
+
+
+```{r}
+NC19 <- select(spp, starts_with("NC") & ends_with("19"))
+NC21 <- select(spp, starts_with("NC") & ends_with("21"))
+NC23 <- select(spp, starts_with("NC") & ends_with("23"))
+NC25 <- select(spp, starts_with("NC") & ends_with("25"))
+NC27 <- select(spp, starts_with("NC") & ends_with("27"))
+NC29 <- select(spp, starts_with("NC") & ends_with("29"))
+NC31 <- select(spp, starts_with("NC") & ends_with("31"))
+NC33 <- select(spp, starts_with("NC") & ends_with("33"))
+NC35 <- select(spp, starts_with("NC") & ends_with("35"))
+NC37 <- select(spp, starts_with("NC") & ends_with("37"))
+NC39 <- select(spp, starts_with("NC") & ends_with("39"))
+NC41 <- select(spp, starts_with("NC") & ends_with("41"))
+
+aNC19.stats <- sncm.fit(spp = t(NC19), pool=t(spp), stats=TRUE, taxon=NULL)
+aNC21.stats <- sncm.fit(spp = t(NC21), pool=t(spp), stats=TRUE, taxon=NULL)
+aNC23.stats <- sncm.fit(spp = t(NC23), pool=t(spp), stats=TRUE, taxon=NULL)
+aNC25.stats <- sncm.fit(spp = t(NC25), pool=t(spp), stats=TRUE, taxon=NULL)
+aNC27.stats <- sncm.fit(spp = t(NC27), pool=t(spp), stats=TRUE, taxon=NULL)
+aNC29.stats <- sncm.fit(spp = t(NC29), pool=t(spp), stats=TRUE, taxon=NULL)
+aNC31.stats <- sncm.fit(spp = t(NC31), pool=t(spp), stats=TRUE, taxon=NULL)
+aNC33.stats <- sncm.fit(spp = t(NC33), pool=t(spp), stats=TRUE, taxon=NULL)
+aNC35.stats <- sncm.fit(spp = t(NC35), pool=t(spp), stats=TRUE, taxon=NULL)
+aNC37.stats <- sncm.fit(spp = t(NC37), pool=t(spp), stats=TRUE, taxon=NULL)
+aNC39.stats <- sncm.fit(spp = t(NC39), pool=t(spp), stats=TRUE, taxon=NULL)
+aNC41.stats <- sncm.fit(spp = t(NC41), pool=t(spp), stats=TRUE, taxon=NULL)
+```
+
+
+```{r}
+NA19 <- select(spp, starts_with("NA") & ends_with("19"))
+NA21 <- select(spp, starts_with("NA") & ends_with("21"))
+NA23 <- select(spp, starts_with("NA") & ends_with("23"))
+NA25 <- select(spp, starts_with("NA") & ends_with("25"))
+NA27 <- select(spp, starts_with("NA") & ends_with("27"))
+NA29 <- select(spp, starts_with("NA") & ends_with("29"))
+NA31 <- select(spp, starts_with("NA") & ends_with("31"))
+NA33 <- select(spp, starts_with("NA") & ends_with("33"))
+NA35 <- select(spp, starts_with("NA") & ends_with("35"))
+NA37 <- select(spp, starts_with("NA") & ends_with("37"))
+NA39 <- select(spp, starts_with("NA") & ends_with("39"))
+NA41 <- select(spp, starts_with("NA") & ends_with("41"))
+
+aNA19.stats <- sncm.fit(spp = t(NA19), pool=t(spp), stats=TRUE, taxon=NULL)
+aNA21.stats <- sncm.fit(spp = t(NA21), pool=t(spp), stats=TRUE, taxon=NULL)
+aNA23.stats <- sncm.fit(spp = t(NA23), pool=t(spp), stats=TRUE, taxon=NULL)
+aNA25.stats <- sncm.fit(spp = t(NA25), pool=t(spp), stats=TRUE, taxon=NULL)
+aNA27.stats <- sncm.fit(spp = t(NA27), pool=t(spp), stats=TRUE, taxon=NULL)
+aNA29.stats <- sncm.fit(spp = t(NA29), pool=t(spp), stats=TRUE, taxon=NULL)
+aNA31.stats <- sncm.fit(spp = t(NA31), pool=t(spp), stats=TRUE, taxon=NULL)
+aNA33.stats <- sncm.fit(spp = t(NA33), pool=t(spp), stats=TRUE, taxon=NULL)
+aNA35.stats <- sncm.fit(spp = t(NA35), pool=t(spp), stats=TRUE, taxon=NULL)
+aNA37.stats <- sncm.fit(spp = t(NA37), pool=t(spp), stats=TRUE, taxon=NULL)
+aNA39.stats <- sncm.fit(spp = t(NA39), pool=t(spp), stats=TRUE, taxon=NULL)
+aNA41.stats <- sncm.fit(spp = t(NA41), pool=t(spp), stats=TRUE, taxon=NULL)
+```
+
+```{r}
+ncm <- read.table("NCM_results.tsv",, sep = "\t", header = TRUE)
+
+
+ggplot(ncm, aes(x = age, y = r2,
+                color = bw,
+                shape = trt))+
+  geom_point(size = 2.5)+
+  geom_smooth(aes(linetype = trt),method = "lm", se = FALSE) +
+  scale_linetype_manual(values = c("solid", "dashed"))+
+  # geom_vline(xintercept = c(9.5), lwd = 0.5, linetype = "dashed", color = "black") +
+  scale_color_manual(values = c("#0072B2", "#E69F00"))+
+  facet_wrap(~ stage, nrow = 1,
+             scales = "free_x")+
+  labs(x = "Age (Days postnatal)",
+       y = "R squared")+
+  theme_bw()
+
+#ggsave("output/assembly_ncm.pdf", width = 14, height = 7)
+```
+
+```{r}
+NBW <- filter(ncm, stage == "Suckling", bw == "NBW", trt == "CON")
+cor.test(NBW$age, NBW$r2, method = "pearson")
+```
+
+```{r}
+LBW <- filter(ncm, stage == "Suckling", bw == "LBW", trt == "CON")
+cor.test(LBW$age, LBW$r2, method = "pearson")
+```
+
+```{r}
+i <- filter(ncm, stage == "Weaning", bw == "LBW", trt == "CON")
+cor.test(i$age, i$r2, method = "pearson")
+```
+```{r}
+i <- filter(ncm, stage == "Weaning", bw == "LBW", trt == "AB")
+cor.test(i$age, i$r2, method = "pearson")
+```
+```{r}
+i <- filter(ncm, stage == "Weaning", bw == "NBW", trt == "CON")
+cor.test(i$age, i$r2, method = "pearson")
+```
+```{r}
+i <- filter(ncm, stage == "Weaning", bw == "NBW", trt == "AB")
+cor.test(i$age, i$r2, method = "pearson")
+```

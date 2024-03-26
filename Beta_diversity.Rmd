@@ -1,0 +1,1313 @@
+---
+title: "Beta_diversity"
+author: "Wenxuan Dong"
+date: "2023-04-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages, include=FALSE}
+library(qiime2R)
+library(tidyverse)
+library(MetBrewer)
+library(RColorBrewer)
+library(plotly)
+library(ggsci)
+```
+
+
+```{r load data, include=FALSE, cache=TRUE}
+meta <- read.table("sample-metadata.tsv", sep = "\t", header = TRUE)
+
+meta <- meta %>%
+  mutate(diarr = if_else(diarrhea > 3.1, "Diarrhea", "Healthy"))
+
+row.names(meta) <- meta[ ,1]
+metadata <- meta
+
+table <- read_qza("qiime_out/rarefied_table.qza")
+otu_table <- as.data.frame(table$data) %>% t()
+
+# Assign each distance matrix to index
+#index <- c("bray_curtis","jaccard","unweighted_unifrac","weighted_unifrac")
+index <- "bray_curtis"
+# Read the principle coordination 
+for (i in index){
+  pcoa_qza<-read_qza(paste0("qiime_out/core-metrics-results/", i, "_pcoa_results.qza"))
+  assign((paste0(i, "_pcoa_qza")), pcoa_qza)
+  pcoa_meta <- pcoa_qza$data$Vectors %>%
+    dplyr::select(SampleID, PC1, PC2, PC3, PC4) %>%
+    inner_join(metadata, by = c("SampleID" = "sample.id"))
+  assign((paste0(i, "_meta")), pcoa_meta)
+}
+
+# Read the distance matrix
+for (i in index){
+  dist_qza <- read_qza(paste0("qiime_out/core-metrics-results/", i, "_distance_matrix.qza"))
+  assign((paste0(i, "_dist_qza")), dist_qza)
+}
+```
+
+```{r wUF overview}
+ggplot(unweighted_unifrac_meta, aes(as.factor(age), PC1))+
+  geom_point()+
+  geom_boxplot()
+
+ggplot(unweighted_unifrac_meta, aes(as.factor(age), PC2))+
+  geom_point()+
+  geom_boxplot()
+
+ggplot(unweighted_unifrac_meta, aes(as.factor(age), PC3))+
+  geom_point()+
+  geom_boxplot()
+```
+
+```{r bc overview}
+ggplot(bray_curtis_meta, aes(as.factor(age), PC1))+
+  #geom_point()+
+  geom_boxplot(outlier.shape = NA)+
+  stat_boxplot(geom = "errorbar",aes(ymin=..ymax..),
+               width=0.3,color="black") +
+  stat_boxplot(geom = "errorbar",aes(ymax=..ymin..),
+               width=0.3,color="black") +
+  labs(x = "Age (Days postnatal)",
+       y = "PCo1") +
+  theme_bw()
+ggsave("output/beta_pc1_time.pdf", width = 4, height = 4)
+
+
+ggplot(bray_curtis_meta, aes(as.factor(age), PC2))+
+  #geom_point()+
+  geom_boxplot(outlier.shape = NA)+
+  stat_boxplot(geom = "errorbar",aes(ymin=..ymax..),
+               width=0.3,color="black") +
+  stat_boxplot(geom = "errorbar",aes(ymax=..ymin..),
+               width=0.3,color="black") +
+  labs(x = "Age (Days postnatal)",
+       y = "PCo2") +
+  theme_bw()
+ggsave("output/beta_pc2_time.pdf", width = 4, height = 4)
+
+ggplot(bray_curtis_meta, aes(as.factor(age), PC3))+
+  geom_point()+
+  geom_boxplot()
+```
+
+# Figures
+## Bray-Curtis
+
+### Bray over time
+```{r, cache=TRUE}
+
+idx <- "Unweighted UniFrac"
+pcoa_qza <- unweighted_unifrac_pcoa_qza
+dist_qza <- unweighted_unifrac_dist_qza
+
+unweighted_unifrac_meta$age <- as.numeric(unweighted_unifrac_meta$age)
+# age days
+ggplot(unweighted_unifrac_meta, 
+       aes(x=PC1, y=PC2, 
+           color = birth_weight, 
+           fill = birth_weight,
+           size = age, #max(age)-age+1, 
+           shape = ifelse(age > 18, as.factor(treatment), "0"))) +
+  geom_point(alpha=.8) + 
+  theme_bw(base_size = 12) +
+  labs(title = paste(idx, "dissimilarity")) +
+  xlab(paste0("PCo1 (", round(100*pcoa_qza$data$ProportionExplained[1], digits = 2), "%)")) +
+  ylab(paste0("PCo2 (", round(100*pcoa_qza$data$ProportionExplained[2], digits = 2), "%)")) + 
+  scale_size(range = c(1, 4)) +
+  scale_color_manual(values = c("#0072B2", "#E69F00"))+
+  theme(legend.position = "None", # c(.7,.1),
+        legend.direction = "horizontal",
+        legend.title = element_text(size = 12),
+        legend.text = element_text(size = 12),
+        plot.title = element_text(size = 12))
+```
+
+```{r bc pcoa, cache=TRUE}
+idx <- "Bray Curtis"
+pcoa_qza <- bray_curtis_pcoa_qza
+dist_qza <- bray_curtis_dist_qza
+
+bray_curtis_meta$age <- as.numeric(bray_curtis_meta$age)
+# age days
+ggplot(bray_curtis_meta,
+       aes(x=PC1, y=PC2,
+           color = birth_weight,
+           fill = birth_weight,
+           size = age, #max(age)-age+1, 
+           # shape = ifelse(age > 18, as.factor(treatment), ""))) +
+           shape = treatment)) +
+  geom_point(alpha=.7) + 
+  theme_bw(base_size = 12) +
+  labs(title = paste(idx, "dissimilarity")) +
+  xlab(paste0("PCo1 (", round(100*pcoa_qza$data$ProportionExplained[1], digits = 2), "%)")) +
+  ylab(paste0("PCo2 (", round(100*pcoa_qza$data$ProportionExplained[2], digits = 2), "%)")) + 
+  scale_size(range = c(1, 4)) +
+  scale_shape_manual(values = c(16, 17)) +
+  scale_color_manual(values = c("#0072B2", "#E69F00"))+
+  theme(legend.position = "right",#c(.7,.1),
+        legend.direction = "horizontal",
+        legend.title = element_text(size = 12),
+        legend.text = element_text(size = 12),
+        plot.title = element_text(size = 12))
+# ggsave("output/beta_overall.pdf", width = 10, height = 7)
+```
+
+
+```{r bc pcoa, cache=TRUE}
+idx <- "Bray Curtis"
+pcoa_qza <- bray_curtis_pcoa_qza
+dist_qza <- bray_curtis_dist_qza
+
+bray_curtis_meta$age <- as.numeric(bray_curtis_meta$age)
+
+centroids <- aggregate(cbind(PC1,PC2)~age_group,bray_curtis_meta,mean)
+centroids <- centroids %>%
+  separate(age_group, into = c("age", "birth_weight_treatment"), sep = "(?<=\\d)(?=[A-Z])", remove = FALSE) %>%
+  separate(birth_weight_treatment, into = c("birth_weight","treatment"), sep = "BW")%>%
+  mutate(birth_weight=if_else(birth_weight =="L", "LBW", "NBW"))%>%
+  mutate(age = as.numeric(age))
+# age days
+ggplot(data=bray_curtis_meta,
+       aes(x=PC1, y=PC2)) +
+  geom_point(aes(x=PC1, y=PC2,
+             color = treatment,
+             #fill = treatment,
+             size = age, #max(age)-age+1,
+             #shape = ifelse(age > 18, as.factor(treatment), ""))) +
+             shape = birth_weight),
+             alpha=.4) +
+  scale_shape_discrete(solid=F) +
+  geom_point(data=centroids,
+             aes(x=PC1, y=PC2,
+             fill = treatment,
+             color = treatment,
+             size = age, #max(age)-age+1, 
+             shape = birth_weight),
+             color = "black") + #, color = "black"
+  theme_bw(base_size = 12) +
+  labs(title = paste(idx, "dissimilarity")) +
+  xlab(paste0("PCo1 (", round(100*pcoa_qza$data$ProportionExplained[1], digits = 2), "%)")) +
+  ylab(paste0("PCo2 (", round(100*pcoa_qza$data$ProportionExplained[2], digits = 2), "%)")) + 
+  scale_size(range = c(1, 4)) +
+  scale_shape_manual(values = c(16, 17)) +
+  scale_shape_discrete(solid=T) +
+  scale_color_manual(values = c('#f44336','#2986cc'))+
+  theme(legend.position = "right",#c(.7,.1),
+        legend.direction = "horizontal")
+#ggsave("output/beta_overall_centroid4.pdf", width = 10, height = 7)
+
+ggplot(centroids, aes(x=PC1, y=PC2))+
+  geom_point(data=bray_curtis_meta, aes(x=PC1, y=PC2,
+                                        color = treatment,
+                                        fill = treatment,
+                                        size = age, #max(age)-age+1,
+                                        #shape = ifelse(age > 18, as.factor(treatment), ""))) +
+                                        shape = birth_weight),
+                                        alpha=.6
+                                        )+
+  scale_color_manual(values = c('#f44336','#2986cc'))+
+  geom_point(aes(color=treatment, fill=treatment, size = age, shape = birth_weight), #
+             color = "black")+ #shape = 21, 
+  scale_shape_manual(values = c(21, 24))+
+  scale_fill_manual(values = c('#f44336','#2986cc'))+
+  theme_bw()+
+  labs(title = paste(idx, "dissimilarity")) +
+  xlab(paste0("PCo1 (", round(100*pcoa_qza$data$ProportionExplained[1], digits = 2), "%)")) +
+  ylab(paste0("PCo2 (", round(100*pcoa_qza$data$ProportionExplained[2], digits = 2), "%)")) +
+  theme(legend.position = "right",#c(.7,.1),
+        legend.direction = "horizontal")
+# ggsave("output/beta_overall_centroid0.6--1.pdf", width = 10, height = 7)
+```
+
+
+```{r}
+ggplot(filter(bray_curtis_meta, age > 18),
+        aes(x=PC1, y=PC2,
+        color = treatment,
+        fill = treatment,
+        shape = birth_weight)) +
+  geom_point(alpha=.8) +
+  scale_color_manual(values = c('#f44336','#2986cc'))+
+  facet_wrap(~ as.factor(age), nrow = 3) +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "none") +
+  labs(title = paste(idx, "dissimilarity"))
+
+# ggsave("output/beta_wean_facet_2.pdf", width = 10, height = 7)
+```
+
+```{r}
+ggplot(filter(bray_curtis_meta, age < 18),
+        aes(x=PC1, y=PC2,
+        color = birth_weight,
+        fill = birth_weight)) +
+  geom_point(alpha=.7, shape = 24) +
+  scale_color_manual(values = c("#0072B2", "#E69F00"))+
+  scale_fill_manual(values = c("#0072B2", "#E69F00"))+
+  facet_wrap(~ as.factor(age), nrow = 3) +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "none")+
+  labs(title = paste(idx, "dissimilarity"))
+
+#ggsave("output/beta_suck_facet.pdf", width = 7.5, height = 7)
+```
+
+
+# statistics
+```{r packages, include=FALSE}
+library(stringi)
+library(rstatix)
+library(lattice)
+library(latticeExtra)
+library(phyloseq)
+library(qiime2R)
+library(vegan)
+library(naniar)
+library(pairwiseAdonis)
+# source('Beta_functions.R')
+```
+
+```{r read convert distance, echo=FALSE, cache=TRUE}
+pcoa_qza <- bray_curtis_pcoa_qza
+dist_qza <- bray_curtis_dist_qza
+
+bc_dist <- dist_qza$data %>% as.matrix() %>% 
+  as.data.frame(rownames = 'SampleID') 
+
+meta_dist <- merge(meta, bc_dist, by=0, all.x = F)
+row.names(meta_dist) <- meta_dist$sample.id
+
+meta_dist_suck <- filter(meta_dist, stage == "suckling")
+meta_dist_wean <- filter(meta_dist, stage == "weaning")
+
+# extract the distance matrix
+dist.bc.suck <- dplyr::select(meta_dist_suck, all_of(meta_dist_suck[['Row.names']]))
+dist.bc.wean <- dplyr::select(meta_dist_wean, all_of(meta_dist_wean[['Row.names']]))
+
+dist.bc.suck <- as.dist(dist.bc.suck)
+dist.bc.wean <- as.dist(dist.bc.wean)
+```
+
+```{r}
+BC.suck <-
+  adonis(
+    dist.bc.suck ~ age + birth_weight + sex, #as.factor(meta_dist_suck$age) * 
+    #strata = meta_dist_suck$age,
+    data = meta_dist_suck,
+    by="margin",
+    permutations = 999
+  )
+BC.suck$aov.tab
+```
+
+
+```{r suck ages adonis}
+for (i in unique(meta_dist_suck$age)){
+  print(paste0("Age",i))
+  distance_meta <- filter(meta_dist, age == i)
+  
+  distance_matrix <- select(distance_meta, all_of(distance_meta[['Row.names']]))
+  distance_matrix <- as.dist(distance_matrix)
+  
+  adonis.result <-
+  adonis(
+    distance_matrix ~ birth_weight + sex,
+    #strata = meta_dist_suck$age,
+    data = distance_meta,
+    by="margin",
+    permutations = 999
+  )
+  print(adonis.result$aov.tab)
+}
+
+# Birth weight effect was not significant before weaning using adonis
+```
+
+```{r suck ages anosim}
+for (i in unique(meta_dist_suck$age)){
+  print(paste0("Age",i))
+  distance_meta <- filter(meta_dist, age == i)
+  
+  distance_matrix <- select(distance_meta, all_of(distance_meta[['Row.names']]))
+  distance_matrix <- as.dist(distance_matrix)
+  
+  anosim.result <- with(distance_meta, anosim(distance_matrix, birth_weight))
+
+  print(summary(anosim.result))
+}
+# Birth weight effect was not significant before weaning using ANOSIM
+```
+
+
+```{r}
+BC.wean <-
+  adonis(
+    dist.bc.wean ~ age + birth_weight + treatment + sex, #as.factor(meta_dist_suck$age) * 
+    #strata = meta_dist_suck$age,
+    data = meta_dist_wean,
+    by="margin",
+    permutations = 999
+  )
+BC.wean$aov.tab
+```
+
+```{r wean ages adonis}
+for (i in unique(meta_dist_wean$age)){
+  print(i)
+  distance_meta <- filter(meta_dist, age == i)
+  
+  distance_matrix <- select(distance_meta, all_of(distance_meta[['Row.names']]))
+  distance_matrix <- as.dist(distance_matrix)
+  
+  adonis.result <-
+  adonis(
+    distance_matrix ~ treatment*birth_weight + sex,
+    #strata = meta_dist_suck$age,
+    data = distance_meta,
+    by="margin",
+    permutations = 999
+  )
+  print(adonis.result$aov.tab)
+}
+
+# treatment effect was significant at days 21-41
+# Birth weight effect was significant at days 23 25 27 29 33
+```
+
+```{r wean ages anosim}
+for (i in unique(meta_dist_wean$age)){
+  print(paste0("Age",i))
+  distance_meta <- filter(meta_dist, age == i)
+  
+  distance_matrix <- select(distance_meta, all_of(distance_meta[['Row.names']]))
+  distance_matrix <- as.dist(distance_matrix)
+  
+  anosim.result <- with(distance_meta, anosim(distance_matrix, group))
+
+  print(summary(anosim.result))
+}
+```
+
+
+```{r wean whole adonis}
+BC.suck <-
+  adonis(
+    dist.bc.suck ~ age + birth_weight + sex, #as.factor(meta_dist_suck$age) * 
+    #strata = meta_dist_suck$age,
+    data = meta_dist_suck,
+    by="margin",
+    permutations = 999
+  )
+BC.suck$aov.tab
+
+BC.disper <- betadisper(dist.bc.suck,  type = c("centroid"), group = meta_dist_suck$age_group)
+boxplot(BC.disper)
+anova(BC.disper)
+permutest(BC.disper, permutations = 999)
+TukeyHSD(BC.disper)
+```
+
+```{r suck pairwise adonis}
+pairwise.adonis2(dist.bc.suck ~ age, data = meta_dist_suck, permutations = 999)
+```
+
+```{r wean pairwies adonis}
+for (i in unique(meta_dist_wean$age)){
+  print(i)
+  distance_meta <- filter(meta_dist, age == i)
+  
+  distance_matrix <- select(distance_meta, all_of(distance_meta[['Row.names']]))
+  distance_matrix <- as.dist(distance_matrix)
+  set.seed(316)
+  adonis.result <- pairwise.adonis2(distance_matrix ~ group, data = distance_meta , permutations = 999)
+
+  print(adonis.result)
+}
+```
+
+```{r PCoA day by day suck}
+
+library(glue)
+
+diss_matrix <- dist_qza$data %>% as.matrix()
+mat <- diss_matrix
+
+df.suck <- NULL
+labs <- NULL
+
+for (i in unique(meta_dist_suck$age)){
+  print(i)
+  mat_subset <- mat[grep(paste0("F", i, "$|M", i, "$"), rownames(mat)),
+                  grep(paste0("F", i, "$|M", i, "$"), colnames(mat))]
+  pcoa <- cmdscale(mat_subset, k = 2, eig = TRUE)
+  pcoa_df <- data.frame(PC1 = pcoa$points[, 1], PC2 = pcoa$points[, 2])
+  pcoa_df$sample.id <- row.names(pcoa_df)
+  
+  df <- inner_join(pcoa_df,meta)
+  df.suck <- rbind(df.suck, df)
+  
+  percent_explained <- 100 * pcoa$eig / sum(pcoa$eig)
+  pretty_pe <- format(round(percent_explained[1:2], digits = 1), nsmall=1, trim=TRUE)
+  # lab <- c(glue("PCo 1 ({pretty_pe[1]}%)"),
+  #         glue("PCo 2 ({pretty_pe[2]}%)"),
+  #         i)
+  lab <- c(pretty_pe[1],pretty_pe[2],i)
+  labs <- rbind(labs, lab)
+}
+
+mean_suck_pc1 <- mean(as.numeric(labs[,1])) #18.12222
+sd_suck_pc1 <- sd(as.numeric(labs[,1])) #3.514533 
+sem_suck_pc1 <- sd_suck_pc1 / sqrt(length(labs[,1])) #1.171511
+
+mean_suck_pc2 <- mean(as.numeric(labs[,2])) #11.73333
+sd_suck_pc2 <- sd(as.numeric(labs[,2])) #2.113646
+sem_suck_pc2 <- sd_suck_pc2 / sqrt(length(labs[,2])) #0.7045487
+
+ggplot(df.suck, aes(PC1, PC2, color = birth_weight)) +
+  geom_point() +
+  stat_ellipse()+
+  #labs(x = labs[1], y = labs[2]) +
+  facet_wrap(~age)+
+  # scale_shape_manual(values = c(16, 17)) +
+  scale_color_manual(values = c("#0072B2", "#E69F00"))+
+  labs(x = "PCo 1 (18.1% ± 1.2%)",
+       y = "PCo 2 (11.7% ± 0.7%)")+
+  theme_bw()+
+  theme(legend.position = "none")
+
+# ggsave("output/beta_suck_facet_re-pcoa.pdf", width = 10, height = 7)
+```
+
+```{r PCoA day by day wean}
+df.wean <- NULL
+labs.wean <- NULL
+
+for (i in unique(meta_dist_wean$age)){
+  print(i)
+  mat_subset <- mat[grep(paste0("F", i, "$|M", i, "$"), rownames(mat)),
+                  grep(paste0("F", i, "$|M", i, "$"), colnames(mat))]
+  pcoa <- cmdscale(mat_subset, k = 2, eig = TRUE)
+  pcoa_df <- data.frame(PC1 = pcoa$points[, 1], PC2 = pcoa$points[, 2])
+  pcoa_df$sample.id <- row.names(pcoa_df)
+  
+  df <- inner_join(pcoa_df,meta)
+  df.wean <- rbind(df.wean, df)
+  
+  percent_explained <- 100 * pcoa$eig / sum(pcoa$eig)
+  pretty_pe <- format(round(percent_explained[1:2], digits = 1), nsmall=1, trim=TRUE)
+  # lab <- c(glue("PCo 1 ({pretty_pe[1]}%)"),
+  #         glue("PCo 2 ({pretty_pe[2]}%)"),
+  #         i)
+  lab <- c(pretty_pe[1],pretty_pe[2],i)
+  labs.wean <- rbind(labs.wean, lab)
+}
+
+
+mean_wean_pc1 <- mean(as.numeric(labs.wean[,1])) #16.05
+sd_wean_pc1 <- sd(as.numeric(labs.wean[,1])) #2.014267
+sem_wean_pc1 <- sd_wean_pc1 / sqrt(length(labs.wean[,1])) #0.5814689
+
+mean_wean_pc2 <- mean(as.numeric(labs.wean[,2])) #9.141667
+sd_wean_pc2 <- sd(as.numeric(labs.wean[,2])) #0.5282188
+sem_wean_pc2 <- sd_wean_pc2 / sqrt(length(labs.wean[,2])) #0.1524836
+
+
+ggplot(df.wean, aes(PC1, PC2, color = treatment, shape = birth_weight)) +
+  geom_point() +
+  #stat_ellipse()+
+  #labs(x = labs[1], y = labs[2]) +
+  facet_wrap(~age)+ #,scales = "free"
+  scale_shape_manual(values = c(16, 17)) +
+  scale_color_manual(values = c('#f44336','#2986cc'))+
+  labs(x = "PCo 1 (16.1% ± 0.6%)",
+       y = "PCo 2 (9.1% ± 0.2%)")+
+  theme_bw()+
+  theme(legend.position = "none")
+
+# ggsave("output/beta_wean_facet_re-pcoa.pdf", width = 10, height = 7)
+```
+
+```{r PCoA diarr}
+library(glue)
+
+diss_matrix <- dist_qza$data %>% as.matrix()
+mat <- diss_matrix
+
+df.diarr <- NULL
+labs.diarr <- NULL
+
+for (i in unique(meta_dist_wean$age)){
+  print(i)
+  mat_subset <- mat[grep(paste0("F", i, "$|M", i, "$"), rownames(mat)),
+                  grep(paste0("F", i, "$|M", i, "$"), colnames(mat))]
+  pcoa <- cmdscale(mat_subset, k = 2, eig = TRUE)
+  pcoa_df <- data.frame(PC1 = pcoa$points[, 1], PC2 = pcoa$points[, 2])
+  pcoa_df$sample.id <- row.names(pcoa_df)
+  
+  df <- inner_join(pcoa_df,meta)
+  df.diarr <- rbind(df.diarr, df)
+  
+  percent_explained <- 100 * pcoa$eig / sum(pcoa$eig)
+  pretty_pe <- format(round(percent_explained[1:2], digits = 1), nsmall=1, trim=TRUE)
+  # lab <- c(glue("PCo 1 ({pretty_pe[1]}%)"),
+  #         glue("PCo 2 ({pretty_pe[2]}%)"),
+  #         i)
+  lab <- c(pretty_pe[1],pretty_pe[2],i)
+  labs.diarr <- rbind(labs.diarr, lab)
+}
+
+
+mean_wean_pc1 <- mean(as.numeric(labs.diarr[,1])) #16.05
+sd_wean_pc1 <- sd(as.numeric(labs.diarr[,1])) #2.014267
+sem_wean_pc1 <- sd_wean_pc1 / sqrt(length(labs.diarr[,1])) #0.5814689
+
+mean_wean_pc2 <- mean(as.numeric(labs.diarr[,2])) #9.141667
+sd_wean_pc2 <- sd(as.numeric(labs.diarr[,2])) #0.5282188
+sem_wean_pc2 <- sd_wean_pc2 / sqrt(length(labs.diarr[,2])) #0.1524836
+
+
+ggplot(df.diarr, aes(PC1, PC2, color = diarr)) + #, shape = group
+  geom_point() +
+  stat_ellipse()+
+  #labs(x = labs[1], y = labs[2]) +
+  facet_wrap(~age)+ #,scales = "free"
+  #scale_shape_manual(values = c(16, 17)) +
+  scale_color_manual(values = c('#f44336','#2986cc'))+
+  labs(x = "PCo 1 (16.1% ± 0.6%)",
+       y = "PCo 2 (9.1% ± 0.2%)")+
+  theme_bw()+
+  theme(legend.position = "right")
+
+# ggsave("output/beta_wean_facet_re-pcoa.pdf", width = 10, height = 7)
+```
+
+
+```{r wean pairwies adonis}
+for (i in unique(meta_dist_wean$age)){
+  print(i)
+  distance_meta <- filter(meta_dist, age == i) %>% 
+    na.omit()
+  
+  distance_matrix <- dplyr::select(distance_meta, all_of(distance_meta[['Row.names']]))
+  distance_matrix <- as.dist(distance_matrix)
+  set.seed(316)
+  adonis.result <- pairwise.adonis2(distance_matrix ~ diarr, data = distance_meta , permutations = 999)
+
+  print(adonis.result)
+}
+```
+
+
+
+```{r}
+meta_health <- filter(meta, age > 26) %>%  # 60 samples
+  filter(age < 34) %>% 
+  filter(diarrhea < 3) %>% 
+  filter(treatment == "CON")
+
+meta_diarr <- filter(meta, age > 26) %>%  # 72 samples
+  filter(age < 34) %>% 
+  filter(diarrhea > 3) %>% 
+  filter(treatment == "CON")
+
+dist_health <- dist_qza$data %>% as.matrix() %>% as.data.frame()
+dist_health <- dist_health[row.names(dist_health) %in% row.names(meta_health),
+                           row.names(dist_health) %in% row.names(meta_health),] #118 samples total
+
+dist_diarr <- dist_qza$data %>% as.matrix() %>% as.data.frame()
+dist_diarr <- dist_diarr[row.names(dist_diarr) %in% row.names(meta_diarr),row.names(dist_diarr) %in% row.names(meta_diarr)] #89 samples total
+
+
+dist_healthy <- dist_health %>% 
+  as_tibble(rownames = 'A') %>% 
+  pivot_longer(-A, names_to = 'B', values_to = 'distances') %>%
+  filter(A != B) %>% 
+  mutate(status = "Healthy")
+
+dist_diarrr <- dist_diarr %>% 
+  as_tibble(rownames = 'A') %>% 
+  pivot_longer(-A, names_to = 'B', values_to = 'distances') %>%
+  filter(A != B) %>% 
+  mutate(status = "Diarrhea")
+
+df <- rbind(dist_healthy, dist_diarrr)
+ggplot(df, aes(x = status, y = as.numeric(distances)))+
+  geom_boxplot()+
+  theme_bw()
+```
+```{r}
+
+df <- NULL
+
+for (i in seq(19, 41, 2)) {
+  print(i)
+  meta_health <- filter(meta, age == i) %>%  # 60 samples
+  filter(diarrhea < 4) %>%
+  filter(treatment == "CON")
+  
+  meta_diarr <- filter(meta, age == i) %>%  # 72 samples
+  filter(diarrhea > 3) %>%
+  filter(treatment == "CON")
+  dist_health <- dist_qza$data %>% as.matrix() %>% as.data.frame()
+  dist_health <- dist_health[row.names(dist_health) %in% row.names(meta_health),
+                           row.names(dist_health) %in% row.names(meta_health),] #118 samples total
+
+  dist_diarr <- dist_qza$data %>% as.matrix() %>% as.data.frame()
+  dist_diarr <- dist_diarr[row.names(dist_diarr) %in% row.names(meta_diarr),
+                           row.names(dist_diarr) %in% row.names(meta_diarr)] #89 samples total
+  
+  dist_healthy <- dist_health %>% 
+    as_tibble(rownames = 'A') %>% 
+    pivot_longer(-A, names_to = 'B', values_to = 'distances') %>%
+    filter(A != B) %>% 
+    mutate(status = "Healthy")%>% 
+    mutate(ages = i)
+
+  dist_diarrr <- dist_diarr %>% 
+  as_tibble(rownames = 'A') %>% 
+  pivot_longer(-A, names_to = 'B', values_to = 'distances') %>%
+  filter(A != B) %>% 
+  mutate(status = "Diarrhea")%>% 
+  mutate(ages = i)
+
+  df <- rbind(df, dist_healthy)
+  df <- rbind(df, dist_diarrr)
+}
+ggplot(df, aes(x = status, y = as.numeric(distances)))+
+  geom_boxplot()+
+  facet_wrap(~ages)+
+  theme_bw()
+
+```
+
+
+```{r dist}
+dist <- dist_qza$data %>% as.matrix() %>% 
+  as_tibble(rownames = 'A') %>% 
+  pivot_longer(-A, names_to = 'B', values_to = 'distances') %>%
+  filter(A != B) %>%
+  separate(A, sep = 'S', into = c('group_a', 'A'), convert=TRUE) %>%
+  separate(A, sep = '[FM]', into = c('animal_a', 'age_a'), convert=TRUE) %>% 
+  separate(B, sep = 'S', into = c('group_b', 'B'), convert=TRUE) %>%
+  separate(B, sep = '[FM]', into = c('animal_b', 'age_b'), convert=TRUE) %>%
+  mutate_all(~ if_else(is.na(.), "NA", as.character(.))) 
+dist1 <- dist %>% 
+  dplyr::mutate(same_group=ifelse(group_a == group_b, group_a, "no")) %>% 
+  dplyr::mutate(same_age=ifelse(age_a == age_b, age_a, "no")) %>% 
+  dplyr::mutate(same_pig=ifelse(animal_a == animal_b, animal_a, "no")) 
+
+dist2 <- dist1 %>% 
+  dplyr::filter(same_group != 'no') %>% 
+  dplyr::filter(same_age != 'no')
+```
+
+```{r dist3}
+dist3 <- dist2 %>% 
+  dplyr::mutate(birth_weight = ifelse(same_group %in% c('LA', 'LC'), 'LBW', 'NBW')) %>% 
+  dplyr::mutate(treatment = ifelse(same_group %in% c('LA', 'NA'), 'Antibiotics', 'Control'))
+dist3$same_age <- as.numeric(dist3$same_age)
+dist3$distances <- as.numeric(dist3$distances)
+```
+
+```{r}
+ggplot(filter(dist3, same_age < 19), aes(same_age, distances, color=birth_weight)) +
+  geom_smooth(method = 'loess') +
+  ylim(c(.5,.9))+
+  #geom_boxplot()+
+  theme_bw()
+
+ggplot(filter(dist3, same_age > 19), aes(same_age, distances, color=same_group)) +
+  geom_smooth(method = 'loess') +
+  ylim(c(.5,.9))+
+  #geom_boxplot()+
+  theme_bw()
+```
+
+```{r}
+dist3$fac_age <- factor(dist3$same_age, levels = c('1','3','5','7','9',
+                                                  '11','13','15','17','19',
+                                                  '21','23','25','27','29',
+                                                  '31','33','35','37','39',
+                                                  '41'))
+
+ggplot(filter(dist3, same_group == 'NC'), aes(fac_age, distances)) +
+  #geom_smooth(method = 'loess') +
+  ylim(c(.25,1))+
+  geom_boxplot(outlier.shape = NA)+
+  stat_boxplot(geom = "errorbar",aes(ymin=..ymax..),
+               width=0.3,color="black") +
+  stat_boxplot(geom = "errorbar",aes(ymax=..ymin..),
+               width=0.3,color="black") +
+  #geom_hline(yintercept = 0.65, linetype = "dashed")+
+  geom_smooth(aes(x=as.numeric(fac_age),y=distances), method = 'lm')+
+  labs(x="Age (Days postnatal)",
+       y="Within-group distances") +
+  theme_bw()
+
+# ggsave("output/beta_dist_NC.pdf", width = 7.5, height = 7)
+
+```
+
+```{r}
+ggplot(filter(dist3, same_group == 'NA'), aes(fac_age, distances)) +
+  #geom_smooth(method = 'loess') +
+  ylim(c(.25,1))+
+  geom_boxplot(outlier.shape = NA)+
+  stat_boxplot(geom = "errorbar",aes(ymin=..ymax..),
+               width=0.3,color="black") +
+  stat_boxplot(geom = "errorbar",aes(ymax=..ymin..),
+               width=0.3,color="black") +
+  #geom_hline(yintercept = 0.65, linetype = "dashed")+
+  geom_smooth(aes(x=as.numeric(fac_age),y=distances), method = 'lm')+
+  labs(x="Age (Days postnatal)",
+       y="Within-group distances") +
+  theme_bw()
+
+#ggsave("output/beta_dist_NA.pdf", width = 7.5, height = 7)
+```
+
+```{r}
+ggplot(filter(dist3, same_group == 'LC'), aes(fac_age, distances)) +
+  #geom_smooth(method = 'loess') +
+  ylim(c(.25,1))+
+  geom_boxplot(outlier.shape = NA)+
+  stat_boxplot(geom = "errorbar",aes(ymin=..ymax..),
+               width=0.3,color="black") +
+  stat_boxplot(geom = "errorbar",aes(ymax=..ymin..),
+               width=0.3,color="black") +
+  #geom_hline(yintercept = 0.65, linetype = "dashed")+
+  geom_smooth(aes(x=as.numeric(fac_age),y=distances), method = 'lm')+
+  labs(x="Age (Days postnatal)",
+       y="Within-group distances") +
+  theme_bw()
+
+#ggsave("output/beta_dist_LC.pdf", width = 7.5, height = 7)
+```
+
+```{r}
+ggplot(filter(dist3, same_group == 'LA'), aes(fac_age, distances)) +
+  #geom_smooth(method = 'loess') +
+  ylim(c(.25,1))+
+  geom_boxplot(outlier.shape = NA)+
+  stat_boxplot(geom = "errorbar",aes(ymin=..ymax..),
+               width=0.3,color="black") +
+  stat_boxplot(geom = "errorbar",aes(ymax=..ymin..),
+               width=0.3,color="black") +
+  geom_smooth(aes(x=as.numeric(fac_age),y=distances), method = 'lm')+
+  #geom_hline(yintercept = 0.65, linetype = "dashed")+
+  labs(x="Age (Days postnatal)",
+       y="Within-group distances") +
+  theme_bw()
+
+#ggsave("output/beta_dist_LA.pdf", width = 7.5, height = 7)
+```
+
+```{r}
+
+ggplot(dist3, aes(fac_age, distances)) +
+  #geom_smooth(method = 'loess') +
+  ylim(c(.25,1))+
+  geom_boxplot(outlier.shape = NA)+
+  stat_boxplot(geom = "errorbar",aes(ymin=..ymax..),
+               width=0.3,color="black") +
+  stat_boxplot(geom = "errorbar",aes(ymax=..ymin..),
+               width=0.3,color="black") +
+  geom_smooth(aes(x=as.numeric(fac_age),y=distances), method = 'lm')+
+  facet_wrap(~same_group)+
+  #geom_hline(yintercept = 0.65, linetype = "dashed")+
+  labs(x="Age (Days postnatal)",
+       y="Within-group distances") +
+  ylim(c(.4,1.1))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5))
+
+#ggsave("output/beta_dist_withinage.pdf", width = 9, height = 7)
+
+```
+```{r}
+dist3$same_group <- factor(dist3$same_group, 
+                           levels = c("NC", "NA", "LC", "LA"))
+dist3$birth_weight <- factor(dist3$birth_weight, 
+                             levels = c("NBW","LBW"))
+dist3.suck <- filter(dist3, same_age < 18)
+
+facet_labels <- c("NBW" = "NBW (n = 22)",
+                  "LBW" = "LBW (n = 22)")
+
+ggplot(dist3.suck, aes(fac_age, distances)) +
+  #geom_smooth(method = 'loess') +
+  ylim(c(.25,1))+
+  geom_boxplot(outlier.shape = NA)+
+  stat_boxplot(geom = "errorbar",aes(ymin=..ymax..),
+               width=0.3,color="black") +
+  stat_boxplot(geom = "errorbar",aes(ymax=..ymin..),
+               width=0.3,color="black") +
+  geom_smooth(aes(x=as.numeric(fac_age),y=distances), method = 'lm')+
+  facet_wrap(~birth_weight,labeller = labeller(birth_weight = facet_labels))+
+  #geom_hline(yintercept = 0.65, linetype = "dashed")+
+  labs(x="Age (Days postnatal)",
+       y="Within-group distances") +
+  ylim(c(.4,1.1))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5))
+
+# ggsave("output/beta_dist_withinage_suck.pdf", width = 9, height = 4)
+```
+
+```{r}
+dist3.wean <- filter(dist3, same_age > 18)
+
+dist3.wean$fac_age <- as.numeric(dist3.wean$fac_age)
+dist3.wean$fac_age <- as.factor(dist3.wean$fac_age)
+
+facet_labels <- c("NC" = "NBW-CON (n = 11)",
+                  "NA" = "NBW-AB (n = 11)",
+                  "LC" = "LBW-CON (n = 11)",
+                  "LA" = "LBW-AB (n = 11)")
+
+ggplot(dist3.wean, aes(fac_age, distances)) +
+  #geom_smooth(method = 'loess') +
+  ylim(c(.25,1))+
+  geom_boxplot(outlier.shape = NA)+
+  stat_boxplot(geom = "errorbar",aes(ymin=..ymax..),
+               width=0.3,color="black") +
+  stat_boxplot(geom = "errorbar",aes(ymax=..ymin..),
+               width=0.3,color="black") +
+  geom_smooth(aes(x=as.numeric(fac_age),y=distances), method = 'lm')+
+  facet_wrap(~same_group, labeller = labeller(same_group = facet_labels))+
+  #geom_hline(yintercept = 0.65, linetype = "dashed")+
+  labs(x="Age (Days postnatal)",
+       y="Within-group distances") +
+  ylim(c(.4,1.1))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5))
+
+# ggsave("output/beta_dist_withinage_wean.pdf", width = 9, height = 6)
+```
+
+```{r}
+i <- filter(dist3, same_group == 'NC')
+i$fac_age <- as.numeric(i$fac_age)
+cor.test(i$fac_age,i$distances)
+
+i <- filter(dist3, same_group == 'NA')
+i$fac_age <- as.numeric(i$fac_age)
+cor.test(i$fac_age,i$distances)
+
+i <- filter(dist3, same_group == 'LC')
+i$fac_age <- as.numeric(i$fac_age)
+cor.test(i$fac_age,i$distances)
+
+i <- filter(dist3, same_group == 'LA')
+i$fac_age <- as.numeric(i$fac_age)
+cor.test(i$fac_age,i$distances)
+```
+
+```{r}
+i <- filter(dist3.suck, birth_weight == 'NBW')
+i$fac_age <- as.numeric(i$fac_age)
+cor.test(i$fac_age,i$distances)
+
+i <- filter(dist3.suck, birth_weight == 'LBW')
+i$fac_age <- as.numeric(i$fac_age)
+cor.test(i$fac_age,i$distances)
+
+```
+
+
+```{r}
+i <- filter(dist3.wean, same_group == 'NC')
+i$fac_age <- as.numeric(i$fac_age)
+cor.test(i$fac_age,i$distances)
+
+i <- filter(dist3.wean, same_group == 'NA')
+i$fac_age <- as.numeric(i$fac_age)
+cor.test(i$fac_age,i$distances)
+
+i <- filter(dist3.wean, same_group == 'LC')
+i$fac_age <- as.numeric(i$fac_age)
+cor.test(i$fac_age,i$distances)
+
+i <- filter(dist3.wean, same_group == 'LA')
+i$fac_age <- as.numeric(i$fac_age)
+cor.test(i$fac_age,i$distances)
+```
+
+
+```{r last4times}
+dist1$age_a <- as.numeric(dist1$age_a)
+dist1$age_b <- as.numeric(dist1$age_b)
+dist4 <- dist1 %>% 
+  filter(age_a > 34, age_b > 34) %>% 
+  #filter(same_age != 'no') %>%
+  filter(same_group != 'no') %>%
+  mutate(indvidual = ifelse(same_pig == "no", "Inter-", "Intra-"))
+  
+modelt <- lm(as.numeric(distances) ~ indvidual * same_group, data=dist4)
+
+coefficients (modelt)
+summary(modelt) #provides the F, df, and P value for the whole model (check the last line of the output) 
+anova(modelt) #provides the F, df, and P value for each independent factor
+# anova_stats(modelt) #provides the effect size (Omega squared is the one to report)
+
+model_means1 <- emmeans(modelt, ~indvidual) #we calculate the means within that model relative to the independent categorical factor that was significant 
+model_means_df <- data.frame(model_means1) #we associate those means to a dataframe object that we will use to run the ggplot
+
+emm_int1 <- emmeans(modelt, "indvidual", by = c("same_group"), model = "multivariate")
+emm_int1
+pairs(emm_int1, adjust = "BH")
+
+emm_int2 <- emmeans(modelt, "same_group", by = c("indvidual"), model = "multivariate")
+emm_int2
+pairs(emm_int2, adjust = "BH")
+```
+
+```{r last4days}
+ggplot(dist4, aes(indvidual,as.numeric(distances), color=same_group))+
+  geom_boxplot(outlier.shape = NA) +
+  geom_signif(annotations = c("<.0001","<.0001","<.0001","<.0001"),
+          y_position = c(1.05,1,0.95,.9),
+          xmin = c(0.72, 0.91, 1.1, 1.28),
+          xmax = c(1.72, 1.91, 2.1, 2.28),
+          colour = "black")+
+  labs(y="Bray-Curtis dissimilarity", color="")+
+  theme_bw()
+# ggsave("output/beta_ind_com.pdf", width = 9, height = 7)
+
+```
+
+```{r day19-25}
+dist1$age_a <- as.numeric(dist1$age_a)
+dist1$age_b <- as.numeric(dist1$age_b)
+dist5 <- dist1 %>% 
+  filter(age_a > 18, age_b > 18) %>% 
+  filter(age_a < 26, age_b < 26) %>% 
+  #filter(same_age != 'no') %>%
+  filter(same_group != 'no') %>%
+  mutate(indvidual = ifelse(same_pig == "no", "Inter-", "Intra-"))
+  
+modelt <- lm(as.numeric(distances) ~ indvidual * same_group, data=dist5)
+
+coefficients (modelt)
+summary(modelt) #provides the F, df, and P value for the whole model (check the last line of the output) 
+anova(modelt) #provides the F, df, and P value for each independent factor
+# anova_stats(modelt) #provides the effect size (Omega squared is the one to report)
+
+model_means1 <- emmeans(modelt, ~indvidual) #we calculate the means within that model relative to the independent categorical factor that was significant 
+model_means_df <- data.frame(model_means1) #we associate those means to a dataframe object that we will use to run the ggplot
+
+emm_int1 <- emmeans(modelt, "indvidual", by = c("same_group"), model = "multivariate")
+emm_int1
+pairs(emm_int1, adjust = "BH")
+
+emm_int2 <- emmeans(modelt, "same_group", by = c("indvidual"), model = "multivariate")
+emm_int2
+pairs(emm_int2, adjust = "BH")
+```
+```{r day19--25}
+ggplot(dist5, aes(indvidual,as.numeric(distances), color=same_group))+
+  geom_boxplot(outlier.shape = NA) +
+  geom_signif(annotations = c("<.0001","<.0001","<.0001","0.004"),
+          y_position = c(1.05,1,0.95,.9),
+          xmin = c(0.72, 0.91, 1.1, 1.28),
+          xmax = c(1.72, 1.91, 2.1, 2.28),
+          colour = "black")+
+  labs(y="Bray-Curtis dissimilarity", color="")+
+  theme_bw()
+
+# ggsave("output/beta_ind_com_19-25.pdf", width = 9, height = 7)
+
+```
+
+```{r day27-33}
+dist1$age_a <- as.numeric(dist1$age_a)
+dist1$age_b <- as.numeric(dist1$age_b)
+dist6 <- dist1 %>% 
+  filter(age_a > 26, age_b > 26) %>% 
+  filter(age_a < 34, age_b < 34) %>% 
+  #filter(same_age != 'no') %>%
+  filter(same_group != 'no') %>%
+  mutate(indvidual = ifelse(same_pig == "no", "Inter-", "Intra-"))
+  
+modelt <- lm(as.numeric(distances) ~ indvidual * same_group, data=dist6)
+
+coefficients (modelt)
+summary(modelt) #provides the F, df, and P value for the whole model (check the last line of the output) 
+anova(modelt) #provides the F, df, and P value for each independent factor
+# anova_stats(modelt) #provides the effect size (Omega squared is the one to report)
+
+model_means1 <- emmeans(modelt, ~indvidual) #we calculate the means within that model relative to the independent categorical factor that was significant 
+model_means_df <- data.frame(model_means1) #we associate those means to a dataframe object that we will use to run the ggplot
+
+emm_int1 <- emmeans(modelt, "indvidual", by = c("same_group"), model = "multivariate")
+emm_int1
+pairs(emm_int1, adjust = "BH")
+
+emm_int2 <- emmeans(modelt, "same_group", by = c("indvidual"), model = "multivariate")
+emm_int2
+pairs(emm_int2, adjust = "BH")
+```
+
+```{r day27--33}
+ggplot(dist6, aes(indvidual,as.numeric(distances), color=same_group))+
+  geom_boxplot(outlier.shape = NA) +
+  geom_signif(annotations = c("<.0001","<.0001","<.0001","<.0001"),
+          y_position = c(1.05,1,0.95,.9),
+          xmin = c(0.72, 0.91, 1.1, 1.28),
+          xmax = c(1.72, 1.91, 2.1, 2.28),
+          colour = "black")+
+  labs(y="Bray-Curtis dissimilarity", color="")+
+  theme_bw()
+# ggsave("output/beta_ind_com27-33.pdf", width = 9, height = 7)
+
+```
+
+```{r dist7}
+dist4$wk <- "week3"
+dist5$wk <- "week1"
+dist6$wk <- "week2"
+
+dist4$week <- "3"
+dist5$week <- "1"
+dist6$week <- "2"
+dist7 <- bind_rows(dist4,dist5,dist6)
+
+ggplot(filter(dist7,indvidual == "Intra-"), aes(wk,as.numeric(distances), color=same_group))+
+  geom_boxplot(outlier.shape = NA) +
+  labs(y="Intra-ind Bray-Curtis dissimilarity", color="",
+       x = "")+
+  geom_smooth(aes(x=as.numeric(week),y=as.numeric(distances)), method = 'lm', se = FALSE)+
+  theme_bw()
+#ggsave("output/beta_ind_com_intra.pdf", width = 9, height = 7)
+```
+
+```{r}
+ggplot(filter(dist7,indvidual == "Inter-"), aes(wk,as.numeric(distances), color=same_group))+
+  geom_boxplot(outlier.shape = NA) +
+  labs(y="Intra-ind Bray-Curtis dissimilarity", color="",
+       x = "")+
+  geom_smooth(aes(x=as.numeric(week),y=as.numeric(distances)), method = 'lm', se = FALSE)+
+  theme_bw()
+# ggsave("output/beta_ind_com_inter.pdf", width = 9, height = 7)
+```
+
+
+```{r}
+for (j in unique(dist7$same_group)){
+  print(j)
+  df <- filter(dist7, indvidual == "Intra-")
+  df <- filter(df, same_group == j)
+  df$week <- as.numeric(df$week)
+  df$distances <- as.numeric(df$distances)
+  print(cor.test(df$week,df$distances))
+}
+```
+
+
+```{r}
+for (j in unique(dist7$same_group)){
+  print(j)
+  df <- filter(dist7, indvidual == "Inter-")
+  df <- filter(df, same_group == j)
+  df$week <- as.numeric(df$week)
+  df$distances <- as.numeric(df$distances)
+  print(cor.test(df$week,df$distances))
+}
+```
+
+
+```{r}
+for (i in c("LA","LC","NA","NC")){
+  for (j in c("Inter-","Intra-")){
+    df <- filter(dist4, same_group == i, indvidual == j)
+    df$distances <- as.numeric(df$distances)
+    print(i)
+    print(j)
+    print(median(df$distances))
+  }
+}
+
+# LA 0.6566434 0.4650881
+# LC 0.6240074 0.4441216
+# NA 0.5994577 0.4596649
+# NC 0.6057525 0.4699787
+```
+
+
+
+```{r}
+dist5 <- dist4 %>% 
+  filter(same_pig != 'no') %>% 
+  separate(same_pig, into = c("sow_id","pig_id"), sep = "P")
+ggplot(dist5, 
+       aes(reorder(pig_id, as.numeric(distances), FUN = median), as.numeric(distances), color=same_group))+
+  geom_boxplot()+
+  labs(y="Bray-Curtis dissimilarity", x="Pig id", color = "")+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5))
+
+# from low to high:
+# 23,8,26,10,44
+# 35,17,16,47,2,
+# 4,29,46,31,32,
+# 24,27,1,42,7,
+# 20,22,9,21,36,
+# 15,5,37,13,12,
+# 33,41,11,14,40,
+# 48,3,25,28,45,
+# 39,38,34,18
+
+# ggsave("output/beta_ind_intra.pdf", height = 7, width = 12)
+```
+
+```{r}
+for (i in unique(dist5$pig_id)){
+  df <- filter(dist5, pig_id == i)
+  df$distances <- as.numeric(df$distances)
+  print(i)
+  print(median(df$distances))
+}
+
+# pig23 0.3506198
+# pig18 0.6132094
+```
+
+```{r}
+dist <- dist_qza$data %>% as.matrix()
+dist6 <- dist %>% 
+  as.data.frame()
+
+dist6 <- dist6[grepl("35$|37$|39$|41$", row.names(dist6)), ]
+dist6 <- dist6[, grepl("35$|37$|39$|41$", colnames(dist6))]
+# dist6 <- as.dist(dist6)
+
+#for (i in unique(c("LA","LC","NA","NC"))){
+  new_df <- dist6[grep("^LA", rownames(dist6)), grep("^LA", names(dist6))]
+  meta_dist6 <- meta_dist[grep("^LA", rownames(meta_dist)),]
+  ado <- adonis2(new_df ~ pig_id, data = meta_dist6)
+  print("LA")
+  print(ado)
+}
+
+
+meta_dist <- filter(meta_dist, age > 34)
+
+adonis2(dist6 ~ pig_id, data = meta_dist)
+```
+
+
+
+
+```{r centroid}
+BC.suck <-
+  adonis(
+    dist.bc.suck ~ age + birth_weight + sex, #as.factor(meta_dist_suck$age) * 
+    #strata = meta_dist_suck$age,
+    data = meta_dist_suck,
+    by="margin",
+    permutations = 999
+  )
+BC.suck$aov.tab
+
+BC.disper <- betadisper(dist.bc.suck,  type = c("centroid"), group = meta_dist_suck$age_group)
+boxplot(BC.disper)
+anova(BC.disper)
+permutest(BC.disper, permutations = 999)
+TukeyHSD(BC.disper)
+
+suck.disper <- data.frame(BC.disper$dist) %>% 
+  rownames_to_column("sample.id") %>% 
+  inner_join(meta)
+
+```
+
+```{r}
+ggplot(filter(suck.disper, group == 'NBWCON'), aes(as.factor(age), BC.disper.dist)) +
+  #geom_smooth(method = 'loess') +
+  ylim(c(.25,.7))+
+  geom_boxplot()+
+  geom_hline(yintercept = 0.4, linetype = "dashed")+
+  theme_bw()
+```
+
+```{r centroid}
+BC.wean <-
+  adonis(
+    dist.bc.wean ~ age + birth_weight + treatment + sex, #as.factor(meta_dist_suck$age) * 
+    #strata = meta_dist_suck$age,
+    data = meta_dist_wean,
+    by="margin",
+    permutations = 999
+  )
+BC.wean$aov.tab
+
+BC.wean.disper <- betadisper(dist.bc.wean,  type = c("centroid"), group = meta_dist_wean$age_group)
+boxplot(BC.wean.disper)
+anova(BC.wean.disper)
+permutest(BC.wean.disper, permutations = 999)
+TukeyHSD(BC.wean.disper)
+
+wean.disper <- data.frame(BC.wean.disper$dist) %>% 
+  rownames_to_column("sample.id") %>% 
+  inner_join(meta)
+
+```
+
+
+```{r}
+ggplot(filter(wean.disper, group == 'NBWCON'), aes(as.factor(age), BC.wean.disper.dist)) +
+  #geom_smooth(method = 'loess') +
+  ylim(c(.25,.7))+
+  geom_boxplot()+
+  geom_hline(yintercept = 0.4, linetype = "dashed")+
+  theme_bw()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+
+dist1$same_age <- factor(dist1$same_age, levels = c('1','3','5','7','9',
+                                                    '11','13','15','17','19',
+                                                    '21','23','25','27','29',
+                                                    '31','33','35','37','39',
+                                                    '41','no'))
+dist1$same_age <- as.numeric(dist1$same_age)
+ggplot(filter(dist1, same_age != 'no', same_group != "no"), aes(same_age, as.numeric(distances), color=same_group))+
+  geom_boxplot()+
+  geom_smooth(se = FALSE, method = "loess")+
+  scale_color_npg()+   
+  theme_classic()+
+  xlab("Age (days)")+
+  ylab("Bray Curtis dissimilarity")+
+  ylim(c(0,1))
+```
+
+
+
+
+
